@@ -74,6 +74,10 @@ type InstrumentationSpec struct {
 	// Defaults to Always if :latest tag is specified, or IfNotPresent otherwise.
 	// +optional
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+
+	// AutoInjection defines automatic injection configuration without annotations.
+	// +optional
+	AutoInjection *AutoInjectionSpec `json:"autoInjection,omitempty"`
 }
 
 // Resource defines the configuration for the resource attributes, as defined by the OpenTelemetry specification.
@@ -368,6 +372,25 @@ type Nginx struct {
 	// Resources describes the compute resource requirements.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resourceRequirements,omitempty"`
+}
+
+// AutoInjectionSpec defines automatic injection configuration.
+type AutoInjectionSpec struct {
+	// Enabled defines whether auto-injection is enabled.
+	Enabled bool `json:"enabled,omitempty"`
+
+	// TargetServices defines list of services to inject by namespace and service name.
+	// +optional
+	TargetServices []TargetService `json:"targetServices,omitempty"`
+}
+
+// TargetService defines a service target for auto-injection.
+type TargetService struct {
+	// Namespace defines the namespace of the target services.
+	Namespace string `json:"namespace"`
+
+	// Services defines list of service names to inject in the namespace.
+	Services []string `json:"services"`
 }
 
 // InstrumentationStatus defines status of the instrumentation.
