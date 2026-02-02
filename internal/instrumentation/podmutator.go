@@ -318,6 +318,27 @@ func (pm *instPodMutator) getServiceName(pod corev1.Pod) string {
 	return pod.Name
 }
 
+// hasOtelEnvVars checks if any container already has OTEL environment variables configured
+func hasOtelEnvVars(pod corev1.Pod) bool {
+	otelEnvPrefixes := []string{
+		"OTEL_",
+		"OTEL_EXPORTER_OTLP_",
+		"OTEL_RESOURCE_ATTRIBUTES",
+		"OTEL_SERVICE_NAME",
+	}
+
+	for _, container := range pod.Spec.Containers {
+		for _, env := range container.Env {
+			for _, prefix := range otelEnvPrefixes {
+				if strings.HasPrefix(env.Name, prefix) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func (pm *instPodMutator) Mutate(ctx context.Context, ns corev1.Namespace, pod corev1.Pod) (corev1.Pod, error) {
 	logger := pm.Logger.WithValues("namespace", pod.Namespace)
 	if pod.Name != "" {
@@ -332,11 +353,17 @@ func (pm *instPodMutator) Mutate(ctx context.Context, ns corev1.Namespace, pod c
 		return pod, nil
 	}
 
-	// Check if pod was already auto-injected to prevent loop
-	if pod.Annotations["instrumentation.opentelemetry.io/auto-injected"] == "true" {
-		logger.Info("Skipping pod instrumentation - already auto-injected")
+	// // Check if pod was already auto-injected to prevent loop
+	// if pod.Annotations["instrumentation.opentelemetry.io/auto-injected"] == "true" {
+	// 	logger.Info("Skipping pod instrumentation - already auto-injected")
+	// 	return pod, nil
+	// }
+
+	// Check if OTEL env vars already exist in containers
+	if hasOtelEnvVars(pod) {
+		logger.Info("Skipping pod instrumentation - OTEL environment variables already configured")
 		return pod, nil
-	}
+	} 
 
 	// Check for auto-injection first
 	if autoInst, cfg, err := pm.shouldAutoInject(ctx, ns, pod); err != nil {
@@ -416,10 +443,11 @@ func (pm *instPodMutator) Mutate(ctx context.Context, ns corev1.Namespace, pod c
 
 		modifiedPod := pm.sdkInjector.inject(ctx, insts, ns, pod, pm.config)
 
-		if modifiedPod.Annotations == nil {
-			modifiedPod.Annotations = make(map[string]string)
-		}
-		modifiedPod.Annotations["instrumentation.opentelemetry.io/auto-injected"] = "true"
+		// // Inject Annotation
+		// if modifiedPod.Annotations == nil {
+		// 	modifiedPod.Annotations = make(map[string]string)
+		// }
+		// modifiedPod.Annotations["instrumentation.opentelemetry.io/auto-injected"] = "true"
 
 		return modifiedPod, nil
 	}
