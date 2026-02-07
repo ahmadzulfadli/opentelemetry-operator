@@ -280,13 +280,8 @@ func TestShouldAutoInject(t *testing.T) {
 					},
 					Spec: v1alpha1.InstrumentationSpec{
 						AutoInjection: &v1alpha1.AutoInjectionSpec{
-							Enabled: true,
-							TargetServices: []v1alpha1.TargetService{
-								{
-									Namespace: "test-ns",
-									Services:  []string{"myapp"},
-								},
-							},
+							Enabled:        true,
+							TargetServices: []string{"myapp"},
 						},
 					},
 				},
@@ -352,13 +347,8 @@ func TestShouldAutoInject(t *testing.T) {
 					},
 					Spec: v1alpha1.InstrumentationSpec{
 						AutoInjection: &v1alpha1.AutoInjectionSpec{
-							Enabled: true,
-							TargetServices: []v1alpha1.TargetService{
-								{
-									Namespace: "test-ns",
-									Services:  []string{"otherapp"},
-								},
-							},
+							Enabled:        true,
+							TargetServices: []string{"otherapp"},
 						},
 					},
 				},
@@ -389,18 +379,17 @@ func TestShouldAutoInject(t *testing.T) {
 					},
 					Spec: v1alpha1.InstrumentationSpec{
 						AutoInjection: &v1alpha1.AutoInjectionSpec{
-							Enabled: true,
-							TargetServices: []v1alpha1.TargetService{
-								{
-									Namespace: "other-ns",
-									Services:  []string{"myapp"},
-								},
-							},
+							Enabled:        true,
+							TargetServices: []string{"myapp"},
 						},
 					},
 				},
 			},
-			expectInst: false,
+			expectInst: true,
+			expectConfig: &serviceConfig{
+				lang:        "java",
+				serviceName: "myapp",
+			},
 		},
 		{
 			name: "go service with executable path",
@@ -426,13 +415,8 @@ func TestShouldAutoInject(t *testing.T) {
 					},
 					Spec: v1alpha1.InstrumentationSpec{
 						AutoInjection: &v1alpha1.AutoInjectionSpec{
-							Enabled: true,
-							TargetServices: []v1alpha1.TargetService{
-								{
-									Namespace: "test-ns",
-									Services:  []string{"go:mygoapp:/app/main"},
-								},
-							},
+							Enabled:        true,
+							TargetServices: []string{"go:mygoapp:/app/main"},
 						},
 					},
 				},
@@ -537,13 +521,8 @@ func TestMutate_AutoInjection(t *testing.T) {
 				Spec: v1alpha1.InstrumentationSpec{
 					Java: v1alpha1.Java{},
 					AutoInjection: &v1alpha1.AutoInjectionSpec{
-						Enabled: true,
-						TargetServices: []v1alpha1.TargetService{
-							{
-								Namespace: "test-ns",
-								Services:  []string{"myapp"},
-							},
-						},
+						Enabled:        true,
+						TargetServices: []string{"myapp"},
 					},
 				},
 			},
@@ -585,13 +564,8 @@ func TestMutate_AutoInjection(t *testing.T) {
 				},
 				Spec: v1alpha1.InstrumentationSpec{
 					AutoInjection: &v1alpha1.AutoInjectionSpec{
-						Enabled: true,
-						TargetServices: []v1alpha1.TargetService{
-							{
-								Namespace: "test-ns",
-								Services:  []string{"myapp"},
-							},
-						},
+						Enabled:        true,
+						TargetServices: []string{"myapp"},
 					},
 				},
 			},
@@ -629,13 +603,8 @@ func TestMutate_AutoInjection(t *testing.T) {
 				Spec: v1alpha1.InstrumentationSpec{
 					Java: v1alpha1.Java{},
 					AutoInjection: &v1alpha1.AutoInjectionSpec{
-						Enabled: true,
-						TargetServices: []v1alpha1.TargetService{
-							{
-								Namespace: "test-ns",
-								Services:  []string{"myapp"},
-							},
-						},
+						Enabled:        true,
+						TargetServices: []string{"myapp"},
 					},
 				},
 			},

@@ -230,14 +230,9 @@ func (pm *instPodMutator) shouldAutoInject(ctx context.Context, ns corev1.Namesp
 			continue
 		}
 
-		for _, target := range inst.Spec.AutoInjection.TargetServices {
-			if target.Namespace != pod.Namespace {
-				continue
-			}
-			for _, configService := range target.Services {
-				if cfg := matchTargetService(podServiceName, configService); cfg != nil {
-					return &inst, cfg, nil
-				}
+		for _, configService := range inst.Spec.AutoInjection.TargetServices {
+			if cfg := matchTargetService(podServiceName, configService); cfg != nil {
+				return &inst, cfg, nil
 			}
 		}
 	}

@@ -381,16 +381,7 @@ type AutoInjectionSpec struct {
 
 	// TargetServices defines list of services to inject by namespace and service name.
 	// +optional
-	TargetServices []TargetService `json:"targetServices,omitempty"`
-}
-
-// TargetService defines a service target for auto-injection.
-type TargetService struct {
-	// Namespace defines the namespace of the target services.
-	Namespace string `json:"namespace"`
-
-	// Services defines list of service names to inject in the namespace.
-	Services []string `json:"services"`
+	TargetServices []string `json:"targetServices"`
 }
 
 // InstrumentationStatus defines status of the instrumentation.

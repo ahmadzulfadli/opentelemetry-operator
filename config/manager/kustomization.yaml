@@ -1,11 +1,2 @@
 resources:
 - manager.yaml
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-images:
-- name: controller
-  newName: ahmadzulfadli/application-public:opentelemetry-operator-auto-inject-v1.2.2
-patches:
-- patch: '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--enable-go-instrumentation=true"}]'
-  target:
-    kind: Deployment

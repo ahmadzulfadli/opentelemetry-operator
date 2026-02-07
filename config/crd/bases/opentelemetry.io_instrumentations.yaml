@@ -374,17 +374,7 @@ spec:
                     type: boolean
                   targetServices:
                     items:
-                      properties:
-                        namespace:
-                          type: string
-                        services:
-                          items:
-                            type: string
-                          type: array
-                      required:
-                      - namespace
-                      - services
-                      type: object
+                      type: string
                     type: array
                 type: object
               defaults:
