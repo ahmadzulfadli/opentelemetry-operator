@@ -106,10 +106,12 @@ type OpenTelemetryCollectorSpec struct {
 	Replicas *int32 `json:"replicas,omitempty"`
 	// MinReplicas sets a lower bound to the autoscaling feature.  Set this if you are using autoscaling. It must be at least 1
 	// +optional
+	//
 	// Deprecated: use "OpenTelemetryCollector.Spec.Autoscaler.MinReplicas" instead.
 	MinReplicas *int32 `json:"minReplicas,omitempty"`
 	// MaxReplicas sets an upper bound to the autoscaling feature. If MaxReplicas is set autoscaling is enabled.
 	// +optional
+	//
 	// Deprecated: use "OpenTelemetryCollector.Spec.Autoscaler.MaxReplicas" instead.
 	MaxReplicas *int32 `json:"maxReplicas,omitempty"`
 	// Autoscaler specifies the pod autoscaling configuration to use
@@ -306,8 +308,8 @@ type PortsSpec struct {
 // OpenTelemetryTargetAllocator defines the configurations for the Prometheus target allocator.
 type OpenTelemetryTargetAllocator struct {
 	// Replicas is the number of pod instances for the underlying TargetAllocator. This should only be set to a value
-	// other than 1 if a strategy that allows for high availability is chosen. Currently, the only allocation strategy
-	// that can be run in a high availability mode is consistent-hashing.
+	// other than 1 if a strategy that allows for high availability is chosen. Currently, the allocation strategies
+	// that can be run in a high availability mode are consistent-hashing and per-node.
 	// +optional
 	Replicas *int32 `json:"replicas,omitempty"`
 	// NodeSelector to schedule OpenTelemetry TargetAllocator pods.
@@ -409,6 +411,16 @@ type OpenTelemetryTargetAllocatorPrometheusCR struct {
 	// Empty or nil map matches all service monitors.
 	// +optional
 	ServiceMonitorSelector map[string]string `json:"serviceMonitorSelector,omitempty"`
+	// DenyFSAccessThroughSMs causes the Target Allocator to drop ServiceMonitor and
+	// PodMonitor endpoints that reference arbitrary files on the file system. When
+	// enabled, endpoints with bearerTokenFile, tlsConfig.caFile, tlsConfig.certFile,
+	// or tlsConfig.keyFile are dropped from the produced scrape configuration while
+	// the remaining endpoints are kept. This prevents tenants from stealing the
+	// Collector's service account token via ServiceMonitor bearerTokenFile
+	// references. This is the equivalent of ArbitraryFSAccessThroughSMs.Deny from
+	// the Prometheus Operator.
+	// +optional
+	DenyFSAccessThroughSMs bool `json:"denyFSAccessThroughSMs,omitempty"`
 }
 
 // ScaleSubresourceStatus defines the observed state of the OpenTelemetryCollector's
@@ -448,11 +460,13 @@ type OpenTelemetryCollectorStatus struct {
 	// Messages about actions performed by the operator on this resource.
 	// +optional
 	// +listType=atomic
+	//
 	// Deprecated: use Kubernetes events instead.
 	Messages []string `json:"messages,omitempty"`
 
 	// Replicas is currently not being set and might be removed in the next version.
 	// +optional
+	//
 	// Deprecated: use "OpenTelemetryCollector.Status.Scale.Replicas" instead.
 	Replicas int32 `json:"replicas,omitempty"`
 }
@@ -608,8 +622,4 @@ type ConfigMapsSpec struct {
 	// Configmap defines name and path where the configMaps should be mounted.
 	Name      string `json:"name"`
 	MountPath string `json:"mountpath"`
-}
-
-func init() {
-	SchemeBuilder.Register(&OpenTelemetryCollector{}, &OpenTelemetryCollectorList{})
 }

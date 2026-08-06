@@ -19,7 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,13 +35,12 @@ import (
 	"github.com/open-telemetry/opentelemetry-operator/internal/manifests/targetallocator"
 	taStatus "github.com/open-telemetry/opentelemetry-operator/internal/status/targetallocator"
 	"github.com/open-telemetry/opentelemetry-operator/pkg/constants"
-	"github.com/open-telemetry/opentelemetry-operator/pkg/featuregate"
 )
 
 // TargetAllocatorReconciler reconciles a TargetAllocator object.
 type TargetAllocatorReconciler struct {
 	client.Client
-	recorder record.EventRecorder
+	recorder events.EventRecorder
 	scheme   *runtime.Scheme
 	log      logr.Logger
 	config   config.Config
@@ -50,7 +49,7 @@ type TargetAllocatorReconciler struct {
 // TargetAllocatorReconcilerParams is the set of options to build a new TargetAllocatorReconciler.
 type TargetAllocatorReconcilerParams struct {
 	client.Client
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 	Scheme   *runtime.Scheme
 	Log      logr.Logger
 	Config   config.Config
@@ -122,7 +121,7 @@ func (r *TargetAllocatorReconciler) getCollector(ctx context.Context, instance v
 func NewTargetAllocatorReconciler(
 	client client.Client,
 	scheme *runtime.Scheme,
-	recorder record.EventRecorder,
+	recorder events.EventRecorder,
 	config config.Config,
 	logger logr.Logger,
 ) *TargetAllocatorReconciler {
@@ -135,8 +134,10 @@ func NewTargetAllocatorReconciler(
 	}
 }
 
-// +kubebuilder:rbac:groups="",resources=pods;configmaps;services;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=configmaps;serviceaccounts;services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors;podmonitors,verbs=get;list;watch;create;update;patch;delete
@@ -149,7 +150,7 @@ func (r *TargetAllocatorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	log := r.log.WithValues("targetallocator", req.NamespacedName)
 
 	var instance v1alpha1.TargetAllocator
-	if err := r.Client.Get(ctx, req.NamespacedName, &instance); err != nil {
+	if err := r.Get(ctx, req.NamespacedName, &instance); err != nil {
 		if !apierrors.IsNotFound(err) {
 			log.Error(err, "unable to fetch TargetAllocator")
 		}
@@ -198,7 +199,7 @@ func (r *TargetAllocatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		ctrlBuilder.Owns(&monitoringv1.PodMonitor{})
 	}
 
-	if r.config.CertManagerAvailability == certmanager.Available && featuregate.EnableTargetAllocatorMTLS.IsEnabled() {
+	if r.config.CertManagerAvailability == certmanager.Available {
 		ctrlBuilder.Owns(&cmv1.Certificate{})
 		ctrlBuilder.Owns(&cmv1.Issuer{})
 	}

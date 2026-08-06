@@ -12,6 +12,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/open-telemetry/opentelemetry-operator/internal/manifests/manifestutils"
 )
 
 func TestMutateServiceAccount(t *testing.T) {
@@ -38,6 +40,43 @@ func TestMutateServiceAccount(t *testing.T) {
 			Annotations: map[string]string{"config.openshift.io/serving-cert-secret-name": "my-secret"},
 		},
 	}, existing)
+}
+
+func TestMutateService(t *testing.T) {
+	preferClose := "PreferClose"
+	preferSameZone := "PreferSameZone"
+	trafficLocal := corev1.ServiceInternalTrafficPolicyLocal
+
+	t.Run("copies desired spec and preserves ClusterIP", func(t *testing.T) {
+		existing := corev1.Service{
+			Spec: corev1.ServiceSpec{
+				Ports:               []corev1.ServicePort{{Name: "otlp", Port: 4317}},
+				Selector:            map[string]string{"app": "collector"},
+				ClusterIP:           "10.96.0.42",
+				ClusterIPs:          []string{"10.96.0.42"},
+				TrafficDistribution: &preferClose,
+			},
+		}
+		desired := corev1.Service{
+			Spec: corev1.ServiceSpec{
+				Ports:                 []corev1.ServicePort{{Name: "otlp", Port: 4317}, {Name: "metrics", Port: 8888}},
+				Selector:              map[string]string{"app": "collector", "version": "v2"},
+				InternalTrafficPolicy: &trafficLocal,
+				TrafficDistribution:   &preferSameZone,
+			},
+		}
+
+		mutateFn := MutateFuncFor(&existing, &desired)
+		err := mutateFn()
+		require.NoError(t, err)
+
+		assert.Equal(t, desired.Spec.Ports, existing.Spec.Ports)
+		assert.Equal(t, desired.Spec.Selector, existing.Spec.Selector)
+		assert.Equal(t, desired.Spec.InternalTrafficPolicy, existing.Spec.InternalTrafficPolicy)
+		assert.Equal(t, desired.Spec.TrafficDistribution, existing.Spec.TrafficDistribution)
+		assert.Equal(t, "10.96.0.42", existing.Spec.ClusterIP)
+		assert.Equal(t, []string{"10.96.0.42"}, existing.Spec.ClusterIPs)
+	})
 }
 
 func TestMutateDaemonsetAdditionalContainers(t *testing.T) {
@@ -175,7 +214,6 @@ func TestMutateDaemonsetAdditionalContainers(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			mutateFn := MutateFuncFor(&tt.existing, &tt.desired)
 			err := mutateFn()
@@ -320,7 +358,6 @@ func TestMutateDeploymentAdditionalContainers(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			mutateFn := MutateFuncFor(&tt.existing, &tt.desired)
 			err := mutateFn()
@@ -465,7 +502,6 @@ func TestMutateStatefulSetAdditionalContainers(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			mutateFn := MutateFuncFor(&tt.existing, &tt.desired)
 			err := mutateFn()
@@ -662,7 +698,6 @@ func TestMutateDaemonsetAffinity(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			mutateFn := MutateFuncFor(&tt.existing, &tt.desired)
 			err := mutateFn()
@@ -859,7 +894,6 @@ func TestMutateDeploymentAffinity(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			mutateFn := MutateFuncFor(&tt.existing, &tt.desired)
 			err := mutateFn()
@@ -1056,7 +1090,6 @@ func TestMutateStatefulSetAffinity(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			mutateFn := MutateFuncFor(&tt.existing, &tt.desired)
 			err := mutateFn()
@@ -1191,7 +1224,6 @@ func TestMutateDaemonsetCollectorArgs(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			mutateFn := MutateFuncFor(&tt.existing, &tt.desired)
 			err := mutateFn()
@@ -1326,7 +1358,6 @@ func TestMutateDeploymentCollectorArgs(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			mutateFn := MutateFuncFor(&tt.existing, &tt.desired)
 			err := mutateFn()
@@ -1461,7 +1492,6 @@ func TestMutateStatefulSetCollectorArgs(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			mutateFn := MutateFuncFor(&tt.existing, &tt.desired)
 			err := mutateFn()
@@ -1671,7 +1701,6 @@ func TestMutateDaemonsetError(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			mutateFn := MutateFuncFor(&tt.existing, &tt.desired)
 			err := mutateFn()
@@ -1828,7 +1857,6 @@ func TestMutateDeploymentError(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			mutateFn := MutateFuncFor(&tt.existing, &tt.desired)
 			err := mutateFn()
@@ -2049,7 +2077,6 @@ func TestMutateStatefulSetError(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			mutateFn := MutateFuncFor(&tt.existing, &tt.desired)
 			err := mutateFn()
@@ -2211,7 +2238,6 @@ func TestMutateDaemonsetLabelChange(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			mutateFn := MutateFuncFor(&tt.existing, &tt.desired)
 			err := mutateFn()
@@ -2374,7 +2400,6 @@ func TestMutateDeploymentLabelChange(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			mutateFn := MutateFuncFor(&tt.existing, &tt.desired)
 			err := mutateFn()
@@ -2537,7 +2562,6 @@ func TestMutateStatefulSetLabelChange(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			mutateFn := MutateFuncFor(&tt.existing, &tt.desired)
 			err := mutateFn()
@@ -2639,4 +2663,189 @@ func TestGetMutateFunc_MutateNetworkPolicy(t *testing.T) {
 	require.Exactly(t, got.Labels, want.Labels)
 	require.Exactly(t, got.Annotations, want.Annotations)
 	require.Exactly(t, got.Spec, want.Spec)
+}
+
+// TestMutatePodTemplateStripsOperatorStampedPrometheusAnnotations exercises the
+// marker-gated strip introduced for the design pivot agreed in
+// https://github.com/open-telemetry/opentelemetry-operator/pull/5069 (Refs #5043).
+// When PodAnnotations stamps the default prometheus.io/* annotations it also stamps
+// PrometheusAnnotationsAddedKey as an ownership marker. The mutate path only removes
+// the prometheus.io/* keys when that marker is present on the existing pod template,
+// so prom annotations the user supplied out of band are preserved.
+func TestMutatePodTemplateStripsOperatorStampedPrometheusAnnotations(t *testing.T) {
+	const (
+		marker    = manifestutils.PrometheusAnnotationsAddedKey
+		userKept  = "ops/internal-bookkeeping"
+		userValue = "should-be-preserved-across-reconciles"
+		sha256Key = "opentelemetry-operator-config/sha256"
+		oldHash   = "old-hash"
+		newHash   = "new-hash"
+	)
+
+	tests := []struct {
+		name              string
+		existingTemplate  corev1.PodTemplateSpec
+		desiredTemplate   corev1.PodTemplateSpec
+		expectAnnotations map[string]string
+	}{
+		{
+			name: "marker present + disable transition removes prom annotations and marker, keeps user keys",
+			existingTemplate: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"prometheus.io/scrape": "true",
+						"prometheus.io/port":   "8888",
+						"prometheus.io/path":   "/metrics",
+						marker:                 "true",
+						sha256Key:              oldHash,
+						userKept:               userValue,
+					},
+				},
+			},
+			desiredTemplate: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						sha256Key: newHash,
+					},
+				},
+			},
+			expectAnnotations: map[string]string{
+				sha256Key: newHash,
+				userKept:  userValue,
+			},
+		},
+		{
+			name: "marker absent (out-of-band user prom annotations) leaves them intact on disable",
+			existingTemplate: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"prometheus.io/scrape": "true",
+						"prometheus.io/port":   "9090",
+						"prometheus.io/path":   "/probe",
+						sha256Key:              oldHash,
+						userKept:               userValue,
+					},
+				},
+			},
+			desiredTemplate: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						sha256Key: newHash,
+					},
+				},
+			},
+			expectAnnotations: map[string]string{
+				"prometheus.io/scrape": "true",
+				"prometheus.io/port":   "9090",
+				"prometheus.io/path":   "/probe",
+				sha256Key:              newHash,
+				userKept:               userValue,
+			},
+		},
+		{
+			name: "enable path keeps marker and prom annotations and user keys",
+			existingTemplate: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"prometheus.io/scrape": "true",
+						"prometheus.io/port":   "8888",
+						"prometheus.io/path":   "/metrics",
+						marker:                 "true",
+						sha256Key:              oldHash,
+						userKept:               userValue,
+					},
+				},
+			},
+			desiredTemplate: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"prometheus.io/scrape": "true",
+						"prometheus.io/port":   "8888",
+						"prometheus.io/path":   "/metrics",
+						marker:                 "true",
+						sha256Key:              newHash,
+					},
+				},
+			},
+			expectAnnotations: map[string]string{
+				"prometheus.io/scrape": "true",
+				"prometheus.io/port":   "8888",
+				"prometheus.io/path":   "/metrics",
+				marker:                 "true",
+				sha256Key:              newHash,
+				userKept:               userValue,
+			},
+		},
+		{
+			name: "upgrade compat: pre-upgrade prom annotations gain the marker on first reconcile under enable",
+			existingTemplate: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"prometheus.io/scrape": "true",
+						"prometheus.io/port":   "8888",
+						"prometheus.io/path":   "/metrics",
+						sha256Key:              oldHash,
+						userKept:               userValue,
+					},
+				},
+			},
+			desiredTemplate: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"prometheus.io/scrape": "true",
+						"prometheus.io/port":   "8888",
+						"prometheus.io/path":   "/metrics",
+						marker:                 "true",
+						sha256Key:              newHash,
+					},
+				},
+			},
+			expectAnnotations: map[string]string{
+				"prometheus.io/scrape": "true",
+				"prometheus.io/port":   "8888",
+				"prometheus.io/path":   "/metrics",
+				marker:                 "true",
+				sha256Key:              newHash,
+				userKept:               userValue,
+			},
+		},
+		{
+			name: "upgrade + immediate disable: pre-upgrade prom annotations survive one toggle (marker never stamped)",
+			existingTemplate: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"prometheus.io/scrape": "true",
+						"prometheus.io/port":   "8888",
+						"prometheus.io/path":   "/metrics",
+						sha256Key:              oldHash,
+						userKept:               userValue,
+					},
+				},
+			},
+			desiredTemplate: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						sha256Key: newHash,
+					},
+				},
+			},
+			expectAnnotations: map[string]string{
+				"prometheus.io/scrape": "true",
+				"prometheus.io/port":   "8888",
+				"prometheus.io/path":   "/metrics",
+				sha256Key:              newHash,
+				userKept:               userValue,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			existing := tt.existingTemplate.DeepCopy()
+			desired := tt.desiredTemplate.DeepCopy()
+			err := mutatePodTemplate(existing, desired)
+			require.NoError(t, err)
+			assert.Exactly(t, tt.expectAnnotations, existing.Annotations)
+		})
+	}
 }

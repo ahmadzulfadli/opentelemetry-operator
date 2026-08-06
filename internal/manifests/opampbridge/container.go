@@ -4,9 +4,11 @@
 package opampbridge
 
 import (
+	"slices"
+
 	"github.com/go-logr/logr"
-	"github.com/operator-framework/operator-lib/proxy"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/open-telemetry/opentelemetry-operator/apis/v1alpha1"
 	"github.com/open-telemetry/opentelemetry-operator/internal/config"
@@ -15,9 +17,9 @@ import (
 )
 
 // Container builds a container for the given OpAMPBridge.
-func Container(cfg config.Config, logger logr.Logger, opampBridge v1alpha1.OpAMPBridge) corev1.Container {
+func Container(cfg config.Config, _ logr.Logger, opampBridge v1alpha1.OpAMPBridge) corev1.Container {
 	image := opampBridge.Spec.Image
-	if len(image) == 0 {
+	if image == "" {
 		image = cfg.OperatorOpAMPBridgeImage
 	}
 
@@ -30,7 +32,7 @@ func Container(cfg config.Config, logger logr.Logger, opampBridge v1alpha1.OpAMP
 		volumeMounts = append(volumeMounts, opampBridge.Spec.VolumeMounts...)
 	}
 
-	var envVars = opampBridge.Spec.Env
+	envVars := slices.Clone(opampBridge.Spec.Env)
 	if opampBridge.Spec.Env == nil {
 		envVars = []corev1.EnvVar{}
 	}
@@ -74,7 +76,7 @@ func Container(cfg config.Config, logger logr.Logger, opampBridge v1alpha1.OpAMP
 		)
 	}
 
-	envVars = append(envVars, proxy.ReadProxyVarsFromEnv()...)
+	envVars = append(envVars, cfg.ProxyEnvVars...)
 
 	return corev1.Container{
 		Name:            naming.OpAMPBridgeContainer(),
@@ -85,5 +87,33 @@ func Container(cfg config.Config, logger logr.Logger, opampBridge v1alpha1.OpAMP
 		EnvFrom:         opampBridge.Spec.EnvFrom,
 		Resources:       opampBridge.Spec.Resources,
 		SecurityContext: opampBridge.Spec.SecurityContext,
+		Ports: []corev1.ContainerPort{
+			{
+				Name:          "opamp",
+				ContainerPort: 8080,
+				Protocol:      corev1.ProtocolTCP,
+			},
+			{
+				Name:          "healthz",
+				ContainerPort: 8081,
+				Protocol:      corev1.ProtocolTCP,
+			},
+		},
+		LivenessProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: "/healthz",
+					Port: intstr.FromString("healthz"),
+				},
+			},
+		},
+		ReadinessProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: "/healthz",
+					Port: intstr.FromString("healthz"),
+				},
+			},
+		},
 	}
 }

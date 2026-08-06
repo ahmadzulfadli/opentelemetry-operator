@@ -11,7 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -26,14 +26,14 @@ type OpAMPBridgeReconciler struct {
 	client.Client
 	scheme   *runtime.Scheme
 	log      logr.Logger
-	recorder record.EventRecorder
+	recorder events.EventRecorder
 	config   config.Config
 }
 
 // OpAMPBridgeReconcilerParams is the set of options to build a new OpAMPBridgeReconciler.
 type OpAMPBridgeReconcilerParams struct {
 	client.Client
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 	Scheme   *runtime.Scheme
 	Log      logr.Logger
 	Config   config.Config
@@ -72,7 +72,7 @@ func NewOpAMPBridgeReconciler(params OpAMPBridgeReconcilerParams) *OpAMPBridgeRe
 func (r *OpAMPBridgeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.log.WithValues("opamp-bridge", req.NamespacedName)
 	var instance v1alpha1.OpAMPBridge
-	if err := r.Client.Get(ctx, req.NamespacedName, &instance); err != nil {
+	if err := r.Get(ctx, req.NamespacedName, &instance); err != nil {
 		if !apierrors.IsNotFound(err) {
 			log.Error(err, "unable to fetch OpAMPBridge")
 		}

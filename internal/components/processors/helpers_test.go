@@ -21,7 +21,7 @@ func TestParserForReturns(t *testing.T) {
 	parser := processors.ProcessorFor(testComponentName)
 	assert.Equal(t, "test", parser.ParserType())
 	assert.Equal(t, "__test", parser.ParserName())
-	ports, err := parser.Ports(logr.Discard(), testComponentName, map[string]interface{}{
+	ports, err := parser.Ports(logr.Discard(), testComponentName, map[string]any{
 		"endpoint": "localhost:9000",
 	})
 	assert.NoError(t, err)
@@ -35,7 +35,7 @@ func TestCanRegister(t *testing.T) {
 	parser := processors.ProcessorFor(testComponentName)
 	assert.Equal(t, "test", parser.ParserType())
 	assert.Equal(t, "__test", parser.ParserName())
-	ports, err := parser.Ports(logr.Discard(), testComponentName, map[string]interface{}{})
+	ports, err := parser.Ports(logr.Discard(), testComponentName, map[string]any{})
 	assert.NoError(t, err)
 	assert.Len(t, ports, 1)
 	assert.Equal(t, ports[0].Port, int32(9000))
@@ -47,8 +47,10 @@ func TestDownstreamParsers(t *testing.T) {
 		processorName string
 		parserName    string
 	}{
-		{"k8sattributes", "k8sattributes", "__k8sattributes"},
-		{"resourcedetection", "resourcedetection", "__resourcedetection"},
+		{"k8s_attributes", "k8s_attributes", "__k8s_attributes"},
+		{"k8sattributes", "k8sattributes", "__k8s_attributes"},
+		{"resource_detection", "resource_detection", "__resource_detection"},
+		{"resourcedetection", "resourcedetection", "__resource_detection"},
 	} {
 		t.Run(tt.processorName, func(t *testing.T) {
 			t.Run("builds successfully", func(t *testing.T) {
@@ -68,7 +70,6 @@ func TestDownstreamParsers(t *testing.T) {
 				// verify
 				assert.Nil(t, err)
 			})
-
 		})
 	}
 }

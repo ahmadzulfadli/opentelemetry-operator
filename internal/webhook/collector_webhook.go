@@ -1,0 +1,547 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package webhook
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/go-logr/logr"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/conversion"
+
+	"github.com/open-telemetry/opentelemetry-operator/apis/v1alpha1"
+	"github.com/open-telemetry/opentelemetry-operator/apis/v1beta1"
+	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/certmanager"
+	autoRBAC "github.com/open-telemetry/opentelemetry-operator/internal/autodetect/rbac"
+	"github.com/open-telemetry/opentelemetry-operator/internal/config"
+	"github.com/open-telemetry/opentelemetry-operator/internal/fips"
+	ta "github.com/open-telemetry/opentelemetry-operator/internal/manifests/targetallocator/adapters"
+	"github.com/open-telemetry/opentelemetry-operator/internal/metrics"
+	"github.com/open-telemetry/opentelemetry-operator/internal/naming"
+	"github.com/open-telemetry/opentelemetry-operator/internal/otelconfig"
+	"github.com/open-telemetry/opentelemetry-operator/internal/rbac"
+	"github.com/open-telemetry/opentelemetry-operator/pkg/featuregate"
+)
+
+const (
+	maxPortLen = 15
+)
+
+var (
+	_ admission.Validator[*v1beta1.OpenTelemetryCollector] = &CollectorWebhook{}
+	_ admission.Defaulter[*v1beta1.OpenTelemetryCollector] = &CollectorWebhook{}
+)
+
+// +kubebuilder:webhook:path=/mutate-opentelemetry-io-v1beta1-opentelemetrycollector,mutating=true,failurePolicy=fail,groups=opentelemetry.io,resources=opentelemetrycollectors,verbs=create;update,versions=v1beta1,name=mopentelemetrycollectorbeta.kb.io,sideEffects=none,admissionReviewVersions=v1
+// +kubebuilder:webhook:verbs=create;update,path=/validate-opentelemetry-io-v1beta1-opentelemetrycollector,mutating=false,failurePolicy=fail,groups=opentelemetry.io,resources=opentelemetrycollectors,versions=v1beta1,name=vopentelemetrycollectorcreateupdatebeta.kb.io,sideEffects=none,admissionReviewVersions=v1
+// +kubebuilder:webhook:verbs=delete,path=/validate-opentelemetry-io-v1beta1-opentelemetrycollector,mutating=false,failurePolicy=ignore,groups=opentelemetry.io,resources=opentelemetrycollectors,versions=v1beta1,name=vopentelemetrycollectordeletebeta.kb.io,sideEffects=none,admissionReviewVersions=v1
+// +kubebuilder:object:generate=false
+
+type CollectorWebhook struct {
+	logger   logr.Logger
+	cfg      config.Config
+	scheme   *runtime.Scheme
+	reviewer *rbac.Reviewer
+	metrics  *metrics.Metrics
+	bv       BuildValidator
+	fips     fips.FIPSCheck
+	recorder events.EventRecorder
+}
+
+func (c CollectorWebhook) Default(_ context.Context, otelcol *v1beta1.OpenTelemetryCollector) error {
+	if len(otelcol.Spec.Mode) == 0 {
+		otelcol.Spec.Mode = v1beta1.ModeDeployment
+	}
+	if len(otelcol.Spec.UpgradeStrategy) == 0 {
+		otelcol.Spec.UpgradeStrategy = v1beta1.UpgradeStrategyAutomatic
+	}
+
+	if otelcol.Labels == nil {
+		otelcol.Labels = map[string]string{}
+	}
+
+	// We can default to one because dependent objects Deployment and HorizontalPodAutoScaler
+	// default to 1 as well.
+	one := int32(1)
+	if otelcol.Spec.Replicas == nil {
+		otelcol.Spec.Replicas = &one
+	}
+	if otelcol.Spec.TargetAllocator.Enabled && otelcol.Spec.TargetAllocator.Replicas == nil {
+		otelcol.Spec.TargetAllocator.Replicas = &one
+	}
+
+	if otelcol.Spec.Autoscaler != nil && otelcol.Spec.Autoscaler.MaxReplicas != nil {
+		if otelcol.Spec.Autoscaler.MinReplicas == nil {
+			otelcol.Spec.Autoscaler.MinReplicas = otelcol.Spec.Replicas
+		}
+
+		if otelcol.Spec.Autoscaler.TargetMemoryUtilization == nil && otelcol.Spec.Autoscaler.TargetCPUUtilization == nil {
+			defaultCPUTarget := int32(90)
+			otelcol.Spec.Autoscaler.TargetCPUUtilization = &defaultCPUTarget
+		}
+	}
+
+	if otelcol.Spec.Ingress.Type == v1beta1.IngressTypeRoute && otelcol.Spec.Ingress.Route.Termination == "" {
+		otelcol.Spec.Ingress.Route.Termination = v1beta1.TLSRouteTerminationTypeEdge
+	}
+	if otelcol.Spec.Ingress.Type == v1beta1.IngressTypeIngress && otelcol.Spec.Ingress.RuleType == "" {
+		otelcol.Spec.Ingress.RuleType = v1beta1.IngressRuleTypePath
+	}
+	// If someone upgrades to a later version without upgrading their CRD they will not have a management state set.
+	// This results in a default state of unmanaged preventing reconciliation from continuing.
+	if len(otelcol.Spec.ManagementState) == 0 {
+		otelcol.Spec.ManagementState = v1beta1.ManagementStateManaged
+	}
+	if featuregate.EnableOperandNetworkPolicy.IsEnabled() && otelcol.Spec.NetworkPolicy.Enabled == nil {
+		trueVal := true
+		otelcol.Spec.NetworkPolicy.Enabled = &trueVal
+	}
+	// Apply config defaults (service pipelines, etc.) but NOT TLS.
+	// TLS defaults are applied at reconciliation time (ConfigMap generation) so that
+	// existing collectors automatically get updated TLS settings when the operator
+	// restarts after a cluster TLS profile change.
+	events, err := otelconfig.ApplyDefaults(&otelcol.Spec.Config, c.logger)
+	if err != nil {
+		return err
+	}
+	for _, event := range events {
+		if c.recorder != nil {
+			c.recorder.Eventf(otelcol, nil, event.Type, event.Reason, event.Reason, event.Message)
+		}
+	}
+	return nil
+}
+
+func (c CollectorWebhook) ValidateCreate(ctx context.Context, otelcol *v1beta1.OpenTelemetryCollector) (admission.Warnings, error) {
+	warnings, err := c.Validate(ctx, otelcol)
+	if err != nil {
+		return warnings, err
+	}
+	if c.metrics != nil {
+		c.metrics.Create(ctx, otelcol)
+	}
+	if c.bv != nil {
+		newWarnings := c.bv(ctx, *otelcol)
+		warnings = append(warnings, newWarnings...)
+	}
+	return warnings, nil
+}
+
+func (c CollectorWebhook) ValidateUpdate(ctx context.Context, otelcolOld, otelcol *v1beta1.OpenTelemetryCollector) (admission.Warnings, error) {
+	if otelcolOld.Spec.Mode != otelcol.Spec.Mode {
+		return admission.Warnings{}, fmt.Errorf("the OpenTelemetry Collector mode is set to %s, which does not support modification", otelcolOld.Spec.Mode)
+	}
+	warnings, err := c.Validate(ctx, otelcol)
+	if err != nil {
+		return warnings, err
+	}
+
+	if c.metrics != nil {
+		c.metrics.Update(ctx, otelcolOld, otelcol)
+	}
+
+	if c.bv != nil {
+		newWarnings := c.bv(ctx, *otelcol)
+		warnings = append(warnings, newWarnings...)
+	}
+	return warnings, nil
+}
+
+func (c CollectorWebhook) ValidateDelete(ctx context.Context, otelcol *v1beta1.OpenTelemetryCollector) (admission.Warnings, error) {
+	warnings, err := c.Validate(ctx, otelcol)
+	if err != nil {
+		return warnings, err
+	}
+
+	if c.metrics != nil {
+		c.metrics.Delete(ctx, otelcol)
+	}
+
+	return warnings, nil
+}
+
+func (c CollectorWebhook) Validate(ctx context.Context, r *v1beta1.OpenTelemetryCollector) (admission.Warnings, error) {
+	warnings := admission.Warnings{}
+
+	nullObjects := otelconfig.NullObjects(&r.Spec.Config)
+	if len(nullObjects) > 0 {
+		warnings = append(warnings, fmt.Sprintf("Collector config spec.config has null objects: %s. For compatibility with other tooling, such as kustomize and kubectl edit, it is recommended to use empty objects e.g. batch: {}.", strings.Join(nullObjects, ", ")))
+	}
+
+	// validate volumeClaimTemplates
+	if r.Spec.Mode != v1beta1.ModeStatefulSet && len(r.Spec.VolumeClaimTemplates) > 0 {
+		return warnings, fmt.Errorf("the OpenTelemetry Collector mode is set to %s, which does not support the attribute 'volumeClaimTemplates'", r.Spec.Mode)
+	}
+
+	// validate persistentVolumeClaimRetentionPolicy
+	if r.Spec.Mode != v1beta1.ModeStatefulSet && r.Spec.PersistentVolumeClaimRetentionPolicy != nil {
+		return warnings, fmt.Errorf("the OpenTelemetry Collector mode is set to %s, which does not support the attribute 'persistentVolumeClaimRetentionPolicy'", r.Spec.Mode)
+	}
+
+	// validate tolerations
+	// NOTE: this validation is also implemented in CRDs using CEL (Common Expression Language)
+	if r.Spec.Mode == v1beta1.ModeSidecar && len(r.Spec.Tolerations) > 0 {
+		return warnings, fmt.Errorf("the OpenTelemetry Collector mode is set to %s, which does not support the attribute 'tolerations'", r.Spec.Mode)
+	}
+
+	// validate priorityClassName
+	// NOTE: this validation is also implemented in CRDs using CEL (Common Expression Language)
+	if r.Spec.Mode == v1beta1.ModeSidecar && r.Spec.PriorityClassName != "" {
+		return warnings, fmt.Errorf("the OpenTelemetry Collector mode is set to %s, which does not support the attribute 'priorityClassName'", r.Spec.Mode)
+	}
+
+	// validate affinity
+	// NOTE: this validation is also implemented in CRDs using CEL (Common Expression Language)
+	if r.Spec.Mode == v1beta1.ModeSidecar && r.Spec.Affinity != nil {
+		return warnings, fmt.Errorf("the OpenTelemetry Collector mode is set to %s, which does not support the attribute 'affinity'", r.Spec.Mode)
+	}
+
+	// NOTE: this validation is also implemented in CRDs using CEL (Common Expression Language)
+	if r.Spec.Mode == v1beta1.ModeSidecar && len(r.Spec.AdditionalContainers) > 0 {
+		return warnings, fmt.Errorf("the OpenTelemetry Collector mode is set to %s, which does not support the attribute 'AdditionalContainers'", r.Spec.Mode)
+	}
+
+	// validate target allocator configs
+	if r.Spec.TargetAllocator.Enabled {
+		taWarnings, err := c.validateTargetAllocatorConfig(ctx, r)
+		if taWarnings != nil {
+			warnings = append(warnings, taWarnings...)
+		}
+		if err != nil {
+			return warnings, err
+		}
+	}
+
+	// validate port config
+	if err := ValidatePorts(r.Spec.Ports); err != nil {
+		return warnings, err
+	}
+	ports, errPorts := otelconfig.GetAllPorts(&r.Spec.Config, c.logger)
+	if errPorts != nil {
+		return warnings, fmt.Errorf("the OpenTelemetry config is incorrect. The port numbers are invalid: %w", errPorts)
+	}
+	for _, p := range ports {
+		truncName := naming.Truncate(p.Name, maxPortLen)
+		if truncName != p.Name {
+			warnings = append(warnings, fmt.Sprintf("the OpenTelemetry config port name '%s' exceeds the maximum length of 15 characters and has been truncated to '%s'", p.Name, truncName))
+		}
+		nameErrs := validation.IsValidPortName(truncName)
+		numErrs := validation.IsValidPortNum(int(p.Port))
+		if len(nameErrs) > 0 || len(numErrs) > 0 {
+			return warnings, fmt.Errorf("the OpenTelemetry config is incorrect. The port name '%s' errors: %s, num '%d' errors: %s", p.Name, nameErrs, p.Port, numErrs)
+		}
+	}
+
+	var maxReplicas *int32
+	if r.Spec.Autoscaler != nil && r.Spec.Autoscaler.MaxReplicas != nil {
+		maxReplicas = r.Spec.Autoscaler.MaxReplicas
+	}
+	var minReplicas *int32
+	if r.Spec.Autoscaler != nil && r.Spec.Autoscaler.MinReplicas != nil {
+		minReplicas = r.Spec.Autoscaler.MinReplicas
+	}
+
+	if r.Spec.Autoscaler != nil && r.Spec.Autoscaler.MinReplicas != nil && r.Spec.Autoscaler.MaxReplicas == nil {
+		return warnings, errors.New("spec.maxReplica must be set when spec.minReplica is set")
+	}
+
+	// check deprecated .Spec.MinReplicas if minReplicas is not set
+	if minReplicas == nil {
+		minReplicas = r.Spec.Replicas
+	}
+
+	// validate autoscale with horizontal pod autoscaler
+	if maxReplicas != nil {
+		if r.Spec.Replicas != nil && *r.Spec.Replicas > *maxReplicas {
+			return warnings, errors.New("the OpenTelemetry Spec autoscale configuration is incorrect, replicas must not be greater than maxReplicas")
+		}
+
+		if minReplicas != nil && *minReplicas > *maxReplicas {
+			return warnings, errors.New("the OpenTelemetry Spec autoscale configuration is incorrect, minReplicas must not be greater than maxReplicas")
+		}
+
+		if r.Spec.Autoscaler != nil {
+			return warnings, checkAutoscalerSpec(r.Spec.Autoscaler)
+		}
+	}
+
+	if r.Spec.Ingress.Type == v1beta1.IngressTypeIngress && r.Spec.Mode == v1beta1.ModeSidecar {
+		return warnings, fmt.Errorf("the OpenTelemetry Spec Ingress configuration is incorrect. Ingress can only be used in combination with the modes: %s, %s, %s",
+			v1beta1.ModeDeployment, v1beta1.ModeDaemonSet, v1beta1.ModeStatefulSet,
+		)
+	}
+
+	if r.Spec.Ingress.Type == v1beta1.IngressTypeIngress && r.Spec.Mode == v1beta1.ModeSidecar {
+		return warnings, fmt.Errorf("the OpenTelemetry Spec Ingress configuiration is incorrect. Ingress can only be used in combination with the modes: %s, %s, %s",
+			v1beta1.ModeDeployment, v1beta1.ModeDaemonSet, v1beta1.ModeStatefulSet,
+		)
+	}
+	if r.Spec.Ingress.RuleType == v1beta1.IngressRuleTypeSubdomain && (r.Spec.Ingress.Hostname == "" || r.Spec.Ingress.Hostname == "*") {
+		return warnings, errors.New("a valid Ingress hostname has to be defined for subdomain ruleType")
+	}
+
+	// validate updateStrategy for DaemonSet
+	if r.Spec.Mode != v1beta1.ModeDaemonSet && len(r.Spec.DaemonSetUpdateStrategy.Type) > 0 {
+		return warnings, fmt.Errorf("the OpenTelemetry Collector mode is set to %s, which does not support the attribute 'updateStrategy'", r.Spec.Mode)
+	}
+
+	// validate updateStrategy for Deployment
+	if r.Spec.Mode != v1beta1.ModeDeployment && len(r.Spec.DeploymentUpdateStrategy.Type) > 0 {
+		return warnings, fmt.Errorf("the OpenTelemetry Collector mode is set to %s, which does not support the attribute 'deploymentUpdateStrategy'", r.Spec.Mode)
+	}
+
+	if c.fips != nil {
+		components := otelconfig.GetEnabledComponents(&r.Spec.Config)
+		if notAllowedComponents := c.fips.DisabledComponents(components[v1beta1.KindReceiver], components[v1beta1.KindExporter], components[v1beta1.KindProcessor], components[v1beta1.KindExtension]); notAllowedComponents != nil {
+			return nil, fmt.Errorf("the collector configuration contains not FIPS compliant components: %s. Please remove it from the config", notAllowedComponents)
+		}
+	}
+
+	// validate that the requesting user holds every permission the operator would auto-grant
+	if c.reviewer != nil {
+		if err := c.validateRBACPrivilegeEscalation(ctx, r); err != nil {
+			return warnings, err
+		}
+	}
+
+	return warnings, nil
+}
+
+func (c CollectorWebhook) validateTargetAllocatorConfig(ctx context.Context, r *v1beta1.OpenTelemetryCollector) (admission.Warnings, error) {
+	if r.Spec.Mode != v1beta1.ModeStatefulSet && r.Spec.Mode != v1beta1.ModeDaemonSet {
+		return nil, fmt.Errorf("the OpenTelemetry Collector mode is set to %s, which does not support the target allocation deployment", r.Spec.Mode)
+	}
+
+	if r.Spec.Mode == v1beta1.ModeDaemonSet && r.Spec.TargetAllocator.AllocationStrategy != v1beta1.TargetAllocatorAllocationStrategyPerNode {
+		return nil, fmt.Errorf("the OpenTelemetry Collector mode is set to %s, which must be used with target allocation strategy %s ", r.Spec.Mode, v1beta1.TargetAllocatorAllocationStrategyPerNode)
+	}
+
+	if r.Spec.TargetAllocator.AllocationStrategy == v1beta1.TargetAllocatorAllocationStrategyPerNode && r.Spec.Mode != v1beta1.ModeDaemonSet {
+		return nil, fmt.Errorf("target allocation strategy %s is only supported in OpenTelemetry Collector mode %s", v1beta1.TargetAllocatorAllocationStrategyPerNode, v1beta1.ModeDaemonSet)
+	}
+
+	cfgYaml, err := r.Spec.Config.Yaml()
+	if err != nil {
+		return nil, err
+	}
+	// validate Prometheus config for target allocation
+	promCfg, err := ta.ConfigToPromConfig(cfgYaml)
+	if err != nil {
+		return nil, fmt.Errorf("the OpenTelemetry Spec Prometheus configuration is incorrect, %w", err)
+	}
+	err = ta.ValidatePromConfig(promCfg, r.Spec.TargetAllocator.Enabled)
+	if err != nil {
+		return nil, fmt.Errorf("the OpenTelemetry Spec Prometheus configuration is incorrect, %w", err)
+	}
+	err = ta.ValidateTargetAllocatorConfig(r.Spec.TargetAllocator.PrometheusCR.Enabled, promCfg)
+	if err != nil {
+		return nil, fmt.Errorf("the OpenTelemetry Spec Prometheus configuration is incorrect, %w", err)
+	}
+	// validate that cert-manager is available when mTLS requires it
+	taSpec := r.Spec.TargetAllocator
+	if taSpec.Mtls != nil && taSpec.Mtls.Enabled &&
+		(taSpec.Mtls.UseCertManager == nil || *taSpec.Mtls.UseCertManager) &&
+		c.cfg.CertManagerAvailability != certmanager.Available {
+		return nil, errors.New("mTLS is enabled with useCertManager but cert-manager is not available; install cert-manager and restart the operator, or set useCertManager to false")
+	}
+
+	// if the prometheusCR is enabled, it needs a suite of permissions to function
+	if r.Spec.TargetAllocator.PrometheusCR.Enabled {
+		saname := r.Spec.TargetAllocator.ServiceAccount
+		if r.Spec.TargetAllocator.ServiceAccount == "" {
+			saname = naming.TargetAllocatorServiceAccount(r.Name)
+		}
+		warnings, err := checkTargetAllocatorPrometheusCRPolicyRules(
+			ctx, c.reviewer, r.GetNamespace(), saname)
+		if err != nil || len(warnings) > 0 {
+			return warnings, err
+		}
+	}
+
+	return nil, nil
+}
+
+// validateRBACPrivilegeEscalation checks that the requesting user holds every permission
+// that the operator would newly grant to the collector's ServiceAccount via auto-RBAC.
+//
+// Without this check a user who has CREATE on OpenTelemetryCollector but no direct RBAC write
+// access could craft a collector config that causes the operator to grant the collector's
+// ServiceAccount permissions the requesting user does not themselves hold — a privilege
+// escalation path equivalent to the one Kubernetes guards against with the "escalate" verb.
+//
+// The check uses a delta approach to avoid false rejections:
+//  1. Determine what RBAC rules the collector config requires.
+//  2. Check what the collector's ServiceAccount already holds.
+//  3. Compute the delta — rules the SA does not yet hold and that reconciliation would grant.
+//  4. Check the requesting user against the delta only.
+//
+// If the SA already holds all required permissions (delta is empty), no new grants will
+// occur and the check passes regardless of the requesting user's permissions.
+//
+// The check is skipped when:
+//   - CreateRBACPermissions is not Available (the auto-RBAC feature is disabled), or
+//   - the collector config requires no extra RBAC rules, or
+//   - no admission.Request is present in the context (direct calls from tests / internal code).
+func (c CollectorWebhook) validateRBACPrivilegeEscalation(ctx context.Context, r *v1beta1.OpenTelemetryCollector) error {
+	if c.cfg.CreateRBACPermissions != autoRBAC.Available {
+		return nil
+	}
+
+	rules, err := otelconfig.GetAllRbacRules(&r.Spec.Config, c.logger)
+	if err != nil {
+		return fmt.Errorf("unable to determine RBAC rules for collector config: %w", err)
+	}
+	if len(rules) == 0 {
+		return nil
+	}
+
+	req, err := admission.RequestFromContext(ctx)
+	if err != nil {
+		// No admission request in context (e.g. called directly in unit tests or internal
+		// reconciliation); skip the check rather than blocking legitimate uses.
+		return nil
+	}
+
+	rulePtrs := make([]*rbacv1.PolicyRule, len(rules))
+	for i := range rules {
+		rulePtrs[i] = &rules[i]
+	}
+
+	// Determine the ServiceAccount name the operator will manage RBAC for.
+	saName := r.Spec.ServiceAccount
+	if saName == "" {
+		saName = naming.ServiceAccount(r.Name)
+	}
+
+	// Step 2: check what the SA already holds.
+	saSARs, err := c.reviewer.CheckPolicyRules(ctx, saName, r.Namespace, rulePtrs...)
+	if err != nil {
+		return fmt.Errorf("unable to check existing SA RBAC permissions: %w", err)
+	}
+
+	// Step 3: compute the delta — permissions the SA does not yet hold.
+	_, delta := rbac.AllSubjectAccessReviewsAllowed(saSARs)
+	if len(delta) == 0 {
+		// SA already holds all required permissions; reconciliation won't grant anything new.
+		return nil
+	}
+
+	// Step 4: check the requesting user against the delta only.
+	username := req.UserInfo.Username
+	groups := req.UserInfo.Groups
+
+	userSARs, err := c.reviewer.CheckSARsForUser(ctx, username, groups, delta)
+	if err != nil {
+		return fmt.Errorf("unable to check RBAC privilege escalation for user %q: %w", username, err)
+	}
+
+	if allowed, denied := rbac.AllSubjectAccessReviewsAllowed(userSARs); !allowed {
+		missing := strings.Join(rbac.WarningsGroupedByResource(denied), "; ")
+		return fmt.Errorf("user %q is not allowed to create a collector whose config would grant permissions they do not hold: %s", username, missing)
+	}
+	return nil
+}
+
+func ValidatePorts(ports []v1beta1.PortsSpec) error {
+	for _, p := range ports {
+		nameErrs := validation.IsValidPortName(p.Name)
+		numErrs := validation.IsValidPortNum(int(p.Port))
+		if len(nameErrs) > 0 || len(numErrs) > 0 {
+			return fmt.Errorf("the OpenTelemetry Spec Ports configuration is incorrect, port name '%s' errors: %s, num '%d' errors: %s",
+				p.Name, nameErrs, p.Port, numErrs)
+		}
+	}
+	return nil
+}
+
+func checkAutoscalerSpec(autoscaler *v1beta1.AutoscalerSpec) error {
+	if autoscaler.Behavior != nil {
+		if autoscaler.Behavior.ScaleDown != nil && autoscaler.Behavior.ScaleDown.StabilizationWindowSeconds != nil &&
+			(*autoscaler.Behavior.ScaleDown.StabilizationWindowSeconds < int32(0) || *autoscaler.Behavior.ScaleDown.StabilizationWindowSeconds > 3600) {
+			return errors.New("the OpenTelemetry Spec autoscale configuration is incorrect, scaleDown.stabilizationWindowSeconds should be >=0 and <=3600")
+		}
+
+		if autoscaler.Behavior.ScaleUp != nil && autoscaler.Behavior.ScaleUp.StabilizationWindowSeconds != nil &&
+			(*autoscaler.Behavior.ScaleUp.StabilizationWindowSeconds < int32(0) || *autoscaler.Behavior.ScaleUp.StabilizationWindowSeconds > 3600) {
+			return errors.New("the OpenTelemetry Spec autoscale configuration is incorrect, scaleUp.stabilizationWindowSeconds should be >=0 and <=3600")
+		}
+	}
+
+	for _, metric := range autoscaler.Metrics {
+		if metric.Type != autoscalingv2.PodsMetricSourceType {
+			return errors.New("the OpenTelemetry Spec autoscale configuration is incorrect, metric type unsupported. Expected metric of source type Pod")
+		}
+
+		// pod metrics target only support value and averageValue.
+		switch metric.Pods.Target.Type {
+		case autoscalingv2.AverageValueMetricType:
+			if val, ok := metric.Pods.Target.AverageValue.AsInt64(); !ok || val < int64(1) {
+				return errors.New("the OpenTelemetry Spec autoscale configuration is incorrect, average value should be greater than 0")
+			}
+		case autoscalingv2.ValueMetricType:
+			if val, ok := metric.Pods.Target.Value.AsInt64(); !ok || val < int64(1) {
+				return errors.New("the OpenTelemetry Spec autoscale configuration is incorrect, value should be greater than 0")
+			}
+		default:
+			return errors.New("the OpenTelemetry Spec autoscale configuration is incorrect, invalid pods target type")
+		}
+	}
+
+	return nil
+}
+
+// BuildValidator enables running the manifest generators for the collector reconciler
+// +kubebuilder:object:generate=false
+type BuildValidator func(ctx context.Context, c v1beta1.OpenTelemetryCollector) admission.Warnings
+
+func NewCollectorWebhook(
+	logger logr.Logger,
+	scheme *runtime.Scheme,
+	cfg config.Config,
+	reviewer *rbac.Reviewer,
+	recorder events.EventRecorder,
+	metrics *metrics.Metrics,
+	bv BuildValidator,
+	fips fips.FIPSCheck,
+) *CollectorWebhook {
+	return &CollectorWebhook{
+		logger:   logger,
+		scheme:   scheme,
+		cfg:      cfg,
+		reviewer: reviewer,
+		recorder: recorder,
+		metrics:  metrics,
+		bv:       bv,
+		fips:     fips,
+	}
+}
+
+func SetupCollectorWebhook(mgr ctrl.Manager, cfg config.Config, reviewer *rbac.Reviewer, metrics *metrics.Metrics, bv BuildValidator, fipsCheck fips.FIPSCheck) error {
+	cvw := NewCollectorWebhook(mgr.GetLogger().WithValues("handler", "CollectorWebhook", "version", "v1beta1"), mgr.GetScheme(), cfg, reviewer, mgr.GetEventRecorder("opentelemetry-operator"), metrics, bv, fipsCheck)
+	return ctrl.NewWebhookManagedBy(mgr, &v1beta1.OpenTelemetryCollector{}).
+		WithValidator(cvw).
+		WithDefaulter(cvw).
+		WithConverter(conversion.NewHubSpokeConverter(
+			&v1beta1.OpenTelemetryCollector{},
+			conversion.NewSpokeConverter(
+				&v1alpha1.OpenTelemetryCollector{},
+				func(_ context.Context, src *v1beta1.OpenTelemetryCollector, dst *v1alpha1.OpenTelemetryCollector) error {
+					return OtelColConvertFrom(dst, src)
+				},
+				func(_ context.Context, src *v1alpha1.OpenTelemetryCollector, dst *v1beta1.OpenTelemetryCollector) error {
+					return OtelColConvertTo(src, dst)
+				},
+			),
+		)).
+		Complete()
+}

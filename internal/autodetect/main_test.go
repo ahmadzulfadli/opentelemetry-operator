@@ -6,7 +6,7 @@ package autodetect_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -26,6 +26,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/autodetectutils"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/certmanager"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/collector"
+	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/gatewayapi"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/opampbridge"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/openshift"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/prometheus"
@@ -55,7 +56,7 @@ func TestDetectPlatformBasedOnAvailableAPIGroups(t *testing.T) {
 			openshift.RoutesAvailable,
 		},
 	} {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			output, err := json.Marshal(tt.apiGroupList)
 			require.NoError(t, err)
 
@@ -170,15 +171,15 @@ const (
 
 func reactorFactory(status v1.SubjectAccessReviewStatus) fakeClientGenerator {
 	return func() kubernetes.Interface {
-		c := fake.NewSimpleClientset()
+		c := fake.NewClientset()
 		c.PrependReactor(createVerb, sarResource, func(action kubeTesting.Action) (handled bool, ret runtime.Object, err error) {
 			// check our expectation here
 			if !action.Matches(createVerb, sarResource) {
-				return false, nil, fmt.Errorf("must be a create for a SAR")
+				return false, nil, errors.New("must be a create for a SAR")
 			}
 			sar, ok := action.(kubeTesting.CreateAction).GetObject().DeepCopyObject().(*v1.SubjectAccessReview)
 			if !ok || sar == nil {
-				return false, nil, fmt.Errorf("bad object")
+				return false, nil, errors.New("bad object")
 			}
 			sar.Status = status
 			return true, sar, nil
@@ -188,7 +189,6 @@ func reactorFactory(status v1.SubjectAccessReviewStatus) fakeClientGenerator {
 }
 
 func TestDetectRBACPermissionsBasedOnAvailableClusterRoles(t *testing.T) {
-
 	for _, tt := range []struct {
 		description          string
 		expectedAvailability autoRBAC.Availability
@@ -242,7 +242,7 @@ func TestDetectRBACPermissionsBasedOnAvailableClusterRoles(t *testing.T) {
 			t.Setenv(autodetectutils.NAMESPACE_ENV_VAR, tt.namespace)
 			t.Setenv(autodetectutils.SA_ENV_VAR, tt.serviceAccount)
 
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {}))
+			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 			defer server.Close()
 
 			r := rbac.NewReviewer(tt.clientGenerator())
@@ -325,7 +325,7 @@ func TestCertManagerAvailability(t *testing.T) {
 			t.Setenv(autodetectutils.NAMESPACE_ENV_VAR, tt.namespace)
 			t.Setenv(autodetectutils.SA_ENV_VAR, tt.serviceAccount)
 
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				output, err := json.Marshal(tt.apiGroupList)
 				require.NoError(t, err)
 
@@ -364,10 +364,10 @@ func TestConfigChangesOnAutoDetect(t *testing.T) {
 		PrometheusCRsAvailabilityFunc: func() (prometheus.Availability, error) {
 			return prometheus.Available, nil
 		},
-		RBACPermissionsFunc: func(ctx context.Context) (autoRBAC.Availability, error) {
+		RBACPermissionsFunc: func(context.Context) (autoRBAC.Availability, error) {
 			return autoRBAC.Available, nil
 		},
-		CertManagerAvailabilityFunc: func(ctx context.Context) (certmanager.Availability, error) {
+		CertManagerAvailabilityFunc: func(context.Context) (certmanager.Availability, error) {
 			return certmanager.Available, nil
 		},
 		TargetAllocatorAvailabilityFunc: func() (targetallocator.Availability, error) {
@@ -416,6 +416,7 @@ type mockAutoDetect struct {
 	CollectorAvailabilityFunc       func() (collector.Availability, error)
 	OpAmpBridgeAvailabilityFunc     func() (opampbridge.Availability, error)
 	NativeSidecarSupportFunc        func() (bool, error)
+	GatewayAPIsAvailabilityFunc     func() (gatewayapi.ApiAvailability, error)
 }
 
 func (m *mockAutoDetect) OpAmpBridgeAvailablity() (opampbridge.Availability, error) {
@@ -432,7 +433,7 @@ func (m *mockAutoDetect) CollectorAvailability() (collector.Availability, error)
 	return collector.NotAvailable, nil
 }
 
-func (m *mockAutoDetect) FIPSEnabled(_ context.Context) bool {
+func (*mockAutoDetect) FIPSEnabled(context.Context) bool {
 	return false
 }
 
@@ -476,4 +477,11 @@ func (m *mockAutoDetect) NativeSidecarSupport() (bool, error) {
 		return m.NativeSidecarSupportFunc()
 	}
 	return false, nil
+}
+
+func (m *mockAutoDetect) GatewayAPIsAvailability() (gatewayapi.ApiAvailability, error) {
+	if m.GatewayAPIsAvailabilityFunc != nil {
+		return m.GatewayAPIsAvailabilityFunc()
+	}
+	return gatewayapi.ApiNotAvailable, nil
 }

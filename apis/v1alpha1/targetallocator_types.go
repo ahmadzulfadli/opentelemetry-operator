@@ -4,14 +4,11 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/open-telemetry/opentelemetry-operator/apis/v1beta1"
 )
-
-func init() {
-	SchemeBuilder.Register(&TargetAllocator{}, &TargetAllocatorList{})
-}
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
@@ -89,6 +86,11 @@ type TargetAllocatorSpec struct {
 	// NetworkPolicy defines the network policy to be applied to the Target Allocator pods.
 	// +optional
 	NetworkPolicy v1beta1.NetworkPolicy `json:"networkPolicy,omitempty"`
+	// AllowInsecureAuthSecrets controls whether auth secret values (e.g. basicAuth passwords)
+	// are served over plain HTTP without requiring mTLS. Only enable this when the target allocator
+	// endpoint is secured by a service mesh or equivalent transport-level security.
+	// +optional
+	AllowInsecureAuthSecrets bool `json:"allowInsecureAuthSecrets,omitempty"`
 	// CollectorNotReadyGracePeriod defines the grace period after which a TargetAllocator stops considering a collector is target assignable.
 	// The default is 30s, which means that if a collector becomes not Ready, the target allocator will wait for 30 seconds before reassigning its targets. The assumption is that the state is temporary, and an expensive target reallocation should be avoided if possible.
 	//
@@ -96,4 +98,14 @@ type TargetAllocatorSpec struct {
 	// +kubebuilder:default:="30s"
 	// +kubebuilder:validation:Format:=duration
 	CollectorNotReadyGracePeriod *metav1.Duration `json:"collectorNotReadyGracePeriod,omitempty"`
+	// Mtls defines the mTLS configuration for the target allocator.
+	// If enabled, the target allocator will communicate with the collector over mTLS.
+	// +optional
+	Mtls *v1beta1.TargetAllocatorMTLS `json:"mtls,omitempty"`
+	// LivenessProbe defines the liveness probe configuration for the Target Allocator container.
+	// +optional
+	LivenessProbe *corev1.Probe `json:"livenessProbe,omitempty"`
+	// ReadinessProbe defines the readiness probe configuration for the Target Allocator container.
+	// +optional
+	ReadinessProbe *corev1.Probe `json:"readinessProbe,omitempty"`
 }

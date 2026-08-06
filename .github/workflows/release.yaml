@@ -17,14 +17,15 @@ jobs:
       current_version: ${{ steps.get-versions.outputs.current_version }}
       desired_version: ${{ steps.get-versions.outputs.desired_version }}
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: "Get versions from versions.txt"
         id: get-versions
         run: |
           echo "desired_version=$(grep -v '#' versions.txt | grep operator= | awk -F= '{print $2}')" >> $GITHUB_OUTPUT
-          echo "current_version=$(git describe --tags --abbrev=0 | sed 's/^v//')" >> $GITHUB_OUTPUT
+          echo "current_version=$(git describe --tags --abbrev=0 --match='v*' | sed 's/^v//')" >> $GITHUB_OUTPUT
 
   release:
     permissions:
@@ -36,12 +37,15 @@ jobs:
       CURRENT_VERSION: ${{ needs.get-versions.outputs.current_version }}
       DESIRED_VERSION: ${{ needs.get-versions.outputs.desired_version }}
     steps:
-    - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
 
     - name: Set up Go
-      uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
-        go-version: "~1.25.6"
+        go-version: "~1.26.5"
+        cache: false
 
     - name: "generate release resources"
       run: make release-artifacts IMG_PREFIX="ghcr.io/open-telemetry/opentelemetry-operator" VERSION=${DESIRED_VERSION}
@@ -51,6 +55,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: ./.ci/create-release-github.sh
 
-    - name: "refresh go proxy module info on release"
-      run: |
-        curl https://proxy.golang.org/github.com/open-telemetry/opentelemetry-operator/@v/${DESIRED_VERSION}.info
+    # Note: the release created above is a draft, so the v${DESIRED_VERSION} git
+    # tag does not exist yet. Tagging the apis/ submodule and refreshing the Go
+    # module proxy happen once the draft is published and the tag is created, in
+    # the tag-release.yaml workflow.

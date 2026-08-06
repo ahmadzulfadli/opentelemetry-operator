@@ -19,7 +19,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: check-metrics
-          image: docker.io/curlimages/curl:latest
+          image: mirror.gcr.io/alpine/curl:latest
           args:
             - /bin/sh
             - -c
@@ -40,11 +40,24 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: check-metrics
-          image: docker.io/curlimages/curl:latest
+          image: mirror.gcr.io/alpine/curl:latest
+          volumeMounts:
+            - name: tls-secret
+              mountPath: /etc/tls
+              readOnly: true
           args:
             - /bin/sh
             - -c
-            - curl -s http://prometheus-cr-targetallocator/scrape_configs | grep "prometheus-cr"
+            - |-
+              curl -s \
+                --cert /etc/tls/tls.crt \
+                --key /etc/tls/tls.key \
+                --cacert /etc/tls/ca.crt \
+                https://prometheus-cr-targetallocator:443/scrape_configs | grep "prometheus-cr"
+      volumes:
+        - name: tls-secret
+          secret:
+            secretName: prometheus-cr-ta-client-cert
 ---
 apiVersion: batch/v1
 kind: Job
@@ -56,8 +69,21 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: check-metrics
-          image: docker.io/curlimages/curl:latest
+          image: mirror.gcr.io/alpine/curl:latest
+          volumeMounts:
+            - name: tls-secret
+              mountPath: /etc/tls
+              readOnly: true
           args:
             - /bin/sh
             - -c
-            - curl -s http://prometheus-cr-targetallocator/jobs | grep "prometheus-cr"
+            - |-
+              curl -s \
+                --cert /etc/tls/tls.crt \
+                --key /etc/tls/tls.key \
+                --cacert /etc/tls/ca.crt \
+                https://prometheus-cr-targetallocator:443/jobs | grep "prometheus-cr"
+      volumes:
+        - name: tls-secret
+          secret:
+            secretName: prometheus-cr-ta-client-cert

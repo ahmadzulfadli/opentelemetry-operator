@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -37,12 +38,10 @@ func TestExtractPortNumbersAndNames(t *testing.T) {
 		actualPortNumbers, actualPortNames := extractPortNumbersAndNames(ports)
 		assert.Equal(t, expectedPortNames, actualPortNames)
 		assert.Equal(t, expectedPortNumbers, actualPortNumbers)
-
 	})
 }
 
 func TestFilterPort(t *testing.T) {
-
 	tests := []struct {
 		name        string
 		candidate   v1.ServicePort
@@ -54,7 +53,8 @@ func TestFilterPort(t *testing.T) {
 			name:      "should filter out duplicate port",
 			candidate: v1.ServicePort{Name: "web", Port: 8080},
 			portNumbers: map[PortNumberKey]bool{
-				newPortNumberKeyByPort(8080): true, newPortNumberKeyByPort(9200): true},
+				newPortNumberKeyByPort(8080): true, newPortNumberKeyByPort(9200): true,
+			},
 			portNames: map[string]bool{"test": true, "metrics": true},
 		},
 
@@ -62,7 +62,8 @@ func TestFilterPort(t *testing.T) {
 			name:      "should filter out duplicate port, protocol specified (TCP)",
 			candidate: v1.ServicePort{Name: "web", Port: 8080, Protocol: v1.ProtocolTCP},
 			portNumbers: map[PortNumberKey]bool{
-				newPortNumberKeyByPort(8080): true, newPortNumberKeyByPort(9200): true},
+				newPortNumberKeyByPort(8080): true, newPortNumberKeyByPort(9200): true,
+			},
 			portNames: map[string]bool{"test": true, "metrics": true},
 		},
 
@@ -70,7 +71,8 @@ func TestFilterPort(t *testing.T) {
 			name:      "should filter out duplicate port, protocol specified (UDP)",
 			candidate: v1.ServicePort{Name: "web", Port: 8080, Protocol: v1.ProtocolUDP},
 			portNumbers: map[PortNumberKey]bool{
-				newPortNumberKey(8080, v1.ProtocolUDP): true, newPortNumberKeyByPort(9200): true},
+				newPortNumberKey(8080, v1.ProtocolUDP): true, newPortNumberKeyByPort(9200): true,
+			},
 			portNames: map[string]bool{"test": true, "metrics": true},
 		},
 
@@ -78,7 +80,8 @@ func TestFilterPort(t *testing.T) {
 			name:      "should not filter unique port",
 			candidate: v1.ServicePort{Name: "web", Port: 8090},
 			portNumbers: map[PortNumberKey]bool{
-				newPortNumberKeyByPort(8080): true, newPortNumberKeyByPort(9200): true},
+				newPortNumberKeyByPort(8080): true, newPortNumberKeyByPort(9200): true,
+			},
 			portNames: map[string]bool{"test": true, "metrics": true},
 			expected:  v1.ServicePort{Name: "web", Port: 8090},
 		},
@@ -87,7 +90,8 @@ func TestFilterPort(t *testing.T) {
 			name:      "should not filter same port with different protocols",
 			candidate: v1.ServicePort{Name: "web", Port: 8080},
 			portNumbers: map[PortNumberKey]bool{
-				newPortNumberKey(8080, v1.ProtocolUDP): true, newPortNumberKeyByPort(9200): true},
+				newPortNumberKey(8080, v1.ProtocolUDP): true, newPortNumberKeyByPort(9200): true,
+			},
 			portNames: map[string]bool{"test": true, "metrics": true},
 			expected:  v1.ServicePort{Name: "web", Port: 8080},
 		},
@@ -96,7 +100,8 @@ func TestFilterPort(t *testing.T) {
 			name:      "should not filter same port with different protocols, candidate has specified port (TCP vs UDP)",
 			candidate: v1.ServicePort{Name: "web", Port: 8080, Protocol: v1.ProtocolTCP},
 			portNumbers: map[PortNumberKey]bool{
-				newPortNumberKey(8080, v1.ProtocolUDP): true, newPortNumberKeyByPort(9200): true},
+				newPortNumberKey(8080, v1.ProtocolUDP): true, newPortNumberKeyByPort(9200): true,
+			},
 			portNames: map[string]bool{"test": true, "metrics": true},
 			expected:  v1.ServicePort{Name: "web", Port: 8080, Protocol: v1.ProtocolTCP},
 		},
@@ -105,7 +110,8 @@ func TestFilterPort(t *testing.T) {
 			name:      "should not filter same port with different protocols, candidate has specified port (UDP vs TCP)",
 			candidate: v1.ServicePort{Name: "web", Port: 8080, Protocol: v1.ProtocolUDP},
 			portNumbers: map[PortNumberKey]bool{
-				newPortNumberKeyByPort(8080): true, newPortNumberKeyByPort(9200): true},
+				newPortNumberKeyByPort(8080): true, newPortNumberKeyByPort(9200): true,
+			},
 			portNames: map[string]bool{"test": true, "metrics": true},
 			expected:  v1.ServicePort{Name: "web", Port: 8080, Protocol: v1.ProtocolUDP},
 		},
@@ -114,7 +120,8 @@ func TestFilterPort(t *testing.T) {
 			name:      "should change the duplicate portName",
 			candidate: v1.ServicePort{Name: "web", Port: 8090},
 			portNumbers: map[PortNumberKey]bool{
-				newPortNumberKeyByPort(8080): true, newPortNumberKeyByPort(9200): true},
+				newPortNumberKeyByPort(8080): true, newPortNumberKeyByPort(9200): true,
+			},
 			portNames: map[string]bool{"web": true, "metrics": true},
 			expected:  v1.ServicePort{Name: "port-8090", Port: 8090},
 		},
@@ -123,7 +130,8 @@ func TestFilterPort(t *testing.T) {
 			name:      "should return nil if fallback name clashes with existing portName",
 			candidate: v1.ServicePort{Name: "web", Port: 8090},
 			portNumbers: map[PortNumberKey]bool{
-				newPortNumberKeyByPort(8080): true, newPortNumberKeyByPort(9200): true},
+				newPortNumberKeyByPort(8080): true, newPortNumberKeyByPort(9200): true,
+			},
 			portNames: map[string]bool{"web": true, "port-8090": true},
 		},
 	}
@@ -135,9 +143,7 @@ func TestFilterPort(t *testing.T) {
 				return
 			}
 			assert.Nil(t, actual)
-
 		})
-
 	}
 }
 
@@ -156,7 +162,6 @@ func TestDesiredService(t *testing.T) {
 		assert.NoError(t, err)
 	})
 	t.Run("should return service with port mentioned in OtelCol.Spec.Ports and inferred ports", func(t *testing.T) {
-
 		grpc := "grpc"
 		jaegerPorts := v1beta1.PortsSpec{
 			ServicePort: v1.ServicePort{
@@ -164,7 +169,8 @@ func TestDesiredService(t *testing.T) {
 				Protocol:    "TCP",
 				Port:        14250,
 				AppProtocol: &grpc,
-			}}
+			},
+		}
 		params := deploymentParams()
 		ports := append(params.OtelCol.Spec.Ports, jaegerPorts)
 		expected := service("test-collector", ports)
@@ -172,7 +178,6 @@ func TestDesiredService(t *testing.T) {
 		actual, err := Service(params)
 		assert.NoError(t, err)
 		assert.Equal(t, expected, *actual)
-
 	})
 
 	t.Run("on OpenShift gRPC appProtocol should be h2c", func(t *testing.T) {
@@ -183,7 +188,8 @@ func TestDesiredService(t *testing.T) {
 				Protocol:    "TCP",
 				Port:        14250,
 				AppProtocol: &h2c,
-			}}
+			},
+		}
 
 		params := deploymentParams()
 
@@ -194,11 +200,9 @@ func TestDesiredService(t *testing.T) {
 		expected := service("test-collector", ports)
 		assert.NoError(t, err)
 		assert.Equal(t, expected, *actual)
-
 	})
 
 	t.Run("should return service with local internal traffic policy", func(t *testing.T) {
-
 		grpc := "grpc"
 		jaegerPorts := v1beta1.PortsSpec{
 			ServicePort: v1.ServicePort{
@@ -206,7 +210,8 @@ func TestDesiredService(t *testing.T) {
 				Protocol:    "TCP",
 				Port:        14250,
 				AppProtocol: &grpc,
-			}}
+			},
+		}
 		p := paramsWithMode(v1beta1.ModeDaemonSet)
 		ports := append(p.OtelCol.Spec.Ports, jaegerPorts)
 		expected := serviceWithInternalTrafficPolicy("test-collector", ports, v1.ServiceInternalTrafficPolicyLocal)
@@ -224,9 +229,9 @@ func TestDesiredService(t *testing.T) {
 			OtelCol: v1beta1.OpenTelemetryCollector{
 				Spec: v1beta1.OpenTelemetryCollectorSpec{Config: v1beta1.Config{
 					Receivers: v1beta1.AnyConfig{
-						Object: map[string]interface{}{
-							"otlp": map[string]interface{}{
-								"protocols": map[string]interface{}{
+						Object: map[string]any{
+							"otlp": map[string]any{
+								"protocols": map[string]any{
 									"grpc": nil,
 									"http": nil,
 								},
@@ -234,8 +239,8 @@ func TestDesiredService(t *testing.T) {
 						},
 					},
 					Exporters: v1beta1.AnyConfig{
-						Object: map[string]interface{}{
-							"otlp": map[string]interface{}{
+						Object: map[string]any{
+							"otlp": map[string]any{
 								"endpoint": "jaeger-allinone-collector-headless.chainsaw-otlp-metrics.svc:4317",
 							},
 						},
@@ -257,7 +262,6 @@ func TestDesiredService(t *testing.T) {
 		assert.Len(t, actual.Spec.Ports, 2)
 		assert.NoError(t, err)
 	})
-
 }
 
 func TestHeadlessService(t *testing.T) {
@@ -293,8 +297,8 @@ func TestMonitoringService(t *testing.T) {
 		params.OtelCol.Spec.Config = v1beta1.Config{
 			Service: v1beta1.Service{
 				Telemetry: &v1beta1.AnyConfig{
-					Object: map[string]interface{}{
-						"metrics": map[string]interface{}{
+					Object: map[string]any{
+						"metrics": map[string]any{
 							"level":   "detailed",
 							"address": "0.0.0.0:9090",
 						},
@@ -332,9 +336,9 @@ func TestExtensionService(t *testing.T) {
 								Extensions: []string{"jaeger_query"},
 							},
 							Extensions: &v1beta1.AnyConfig{
-								Object: map[string]interface{}{
-									"jaeger_query": map[string]interface{}{
-										"http": map[string]interface{}{
+								Object: map[string]any{
+									"jaeger_query": map[string]any{
+										"http": map[string]any{
 											"endpoint": "0.0.0.0:16686",
 										},
 									},
@@ -369,10 +373,13 @@ func TestExtensionService(t *testing.T) {
 								Extensions: []string{"jaeger_query"},
 							},
 							Extensions: &v1beta1.AnyConfig{
-								Object: map[string]interface{}{
-									"jaeger_query": map[string]interface{}{
-										"http": map[string]interface{}{
+								Object: map[string]any{
+									"jaeger_query": map[string]any{
+										"http": map[string]any{
 											"endpoint": "0.0.0.0:16686",
+										},
+										"grpc": map[string]any{
+											"endpoint": "0.0.0.0:16685",
 										},
 									},
 								},
@@ -389,10 +396,17 @@ func TestExtensionService(t *testing.T) {
 						IntVal: 16686,
 					},
 				},
+				{
+					Name: "jaeger-query-2",
+					Port: 16685,
+					TargetPort: intstr.IntOrString{
+						IntVal: 16685,
+					},
+				},
 			},
 		},
 		{
-			name: "when the extension has both http and grpc endpoint",
+			name: "when the extension has both http and grpc endpoint with same port",
 			params: manifests.Params{
 				Config: config.Config{},
 				Log:    testLogger,
@@ -406,12 +420,12 @@ func TestExtensionService(t *testing.T) {
 								Extensions: []string{"jaeger_query"},
 							},
 							Extensions: &v1beta1.AnyConfig{
-								Object: map[string]interface{}{
-									"jaeger_query": map[string]interface{}{
-										"http": map[string]interface{}{
+								Object: map[string]any{
+									"jaeger_query": map[string]any{
+										"http": map[string]any{
 											"endpoint": "0.0.0.0:16686",
 										},
-										"grpc": map[string]interface{}{
+										"grpc": map[string]any{
 											"endpoint": "0.0.0.0:16686",
 										},
 									},
@@ -446,7 +460,7 @@ func TestExtensionService(t *testing.T) {
 								Extensions: []string{"jaeger_query"},
 							},
 							Extensions: &v1beta1.AnyConfig{
-								Object: map[string]interface{}{},
+								Object: map[string]any{},
 							},
 						},
 					},
@@ -469,8 +483,8 @@ func TestExtensionService(t *testing.T) {
 								Extensions: []string{"jaeger_query"},
 							},
 							Extensions: &v1beta1.AnyConfig{
-								Object: map[string]interface{}{
-									"jaeger_query": map[string]interface{}{},
+								Object: map[string]any{
+									"jaeger_query": map[string]any{},
 								},
 							},
 						},
@@ -490,7 +504,6 @@ func TestExtensionService(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			actual, err := ExtensionService(tc.params)
 			assert.NoError(t, err)
@@ -499,10 +512,12 @@ func TestExtensionService(t *testing.T) {
 				assert.NotNil(t, actual)
 				assert.Equal(t, actual.Name, naming.ExtensionService(tc.params.OtelCol.Name))
 				// ports assertion
-				assert.Equal(t, len(tc.expectedPorts), len(actual.Spec.Ports))
-				assert.Equal(t, tc.expectedPorts[0].Name, actual.Spec.Ports[0].Name)
-				assert.Equal(t, tc.expectedPorts[0].Port, actual.Spec.Ports[0].Port)
-				assert.Equal(t, tc.expectedPorts[0].TargetPort.IntVal, actual.Spec.Ports[0].TargetPort.IntVal)
+				require.Equal(t, len(tc.expectedPorts), len(actual.Spec.Ports))
+				for i, expectedPort := range tc.expectedPorts {
+					assert.Equal(t, expectedPort.Name, actual.Spec.Ports[i].Name)
+					assert.Equal(t, expectedPort.Port, actual.Spec.Ports[i].Port)
+					assert.Equal(t, expectedPort.TargetPort.IntVal, actual.Spec.Ports[i].TargetPort.IntVal)
+				}
 			} else {
 				// no ports, no service
 				assert.Nil(t, actual)
@@ -515,7 +530,7 @@ func service(name string, ports []v1beta1.PortsSpec) v1.Service {
 	return serviceWithInternalTrafficPolicy(name, ports, v1.ServiceInternalTrafficPolicyCluster)
 }
 
-func serviceWithInternalTrafficPolicy(name string, ports []v1beta1.PortsSpec, internalTrafficPolicy v1.ServiceInternalTrafficPolicyType) v1.Service {
+func serviceWithInternalTrafficPolicy(name string, ports []v1beta1.PortsSpec, internalTrafficPolicy v1.ServiceInternalTrafficPolicy) v1.Service {
 	params := deploymentParams()
 	labels := manifestutils.Labels(params.OtelCol.ObjectMeta, name, params.OtelCol.Spec.Image, ComponentOpenTelemetryCollector, []string{})
 	labels[serviceTypeLabel] = BaseServiceType.String()
@@ -527,7 +542,7 @@ func serviceWithInternalTrafficPolicy(name string, ports []v1beta1.PortsSpec, in
 
 	svcPorts := []v1.ServicePort{}
 	for _, p := range ports {
-		p.ServicePort.TargetPort = intstr.FromInt32(p.Port)
+		p.TargetPort = intstr.FromInt32(p.Port)
 		svcPorts = append(svcPorts, p.ServicePort)
 	}
 
@@ -584,6 +599,31 @@ func TestServiceWithIpFamily(t *testing.T) {
 		actual, err := Service(params)
 		assert.NoError(t, err)
 		assert.Equal(t, actual.Spec.IPFamilyPolicy, params.OtelCol.Spec.IpFamilyPolicy)
+	})
+}
+
+func TestServiceWithSessionAffinity(t *testing.T) {
+	t.Run("should set SessionAffinity when specified", func(t *testing.T) {
+		params := deploymentParams()
+		sessionAffinity := v1.ServiceAffinityClientIP
+		timeoutSeconds := int32(10800)
+		sessionAffinityConfig := &v1.SessionAffinityConfig{
+			ClientIP: &v1.ClientIPConfig{TimeoutSeconds: &timeoutSeconds},
+		}
+		params.OtelCol.Spec.SessionAffinity = &sessionAffinity
+		params.OtelCol.Spec.SessionAffinityConfig = sessionAffinityConfig
+		actual, err := Service(params)
+		assert.NoError(t, err)
+		assert.Equal(t, sessionAffinity, actual.Spec.SessionAffinity)
+		assert.Equal(t, sessionAffinityConfig, actual.Spec.SessionAffinityConfig)
+	})
+
+	t.Run("should not set SessionAffinity when not specified", func(t *testing.T) {
+		params := deploymentParams()
+		actual, err := Service(params)
+		assert.NoError(t, err)
+		assert.Empty(t, actual.Spec.SessionAffinity)
+		assert.Nil(t, actual.Spec.SessionAffinityConfig)
 	})
 }
 

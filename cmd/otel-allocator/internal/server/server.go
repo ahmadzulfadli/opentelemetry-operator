@@ -4,13 +4,14 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"fmt"
 	"net/http"
 	"net/http/pprof"
 	"net/url"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	"github.com/goccy/go-json"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	promcommconfig "github.com/prometheus/common/config"
 	promconfig "github.com/prometheus/prometheus/config"
@@ -60,9 +62,22 @@ type Server struct {
 	scrapeConfigResponse                 []byte
 	ScrapeConfigMarshalledSecretResponse []byte
 	httpDuration                         metric.Float64Histogram
+	allowInsecureAuthSecrets             bool
+	// metricsGatherer, when set, is used to serve the /metrics endpoint. Defaults to
+	// the global Prometheus default gatherer.
+	metricsGatherer prometheus.Gatherer
 }
 
 type Option func(*Server)
+
+// WithMetricsGatherer sets the Prometheus gatherer used to serve /metrics. This allows
+// the caller to combine multiple registries (e.g. the default registry plus a dedicated
+// OTel SDK registry) into a single endpoint.
+func WithMetricsGatherer(gatherer prometheus.Gatherer) Option {
+	return func(s *Server) {
+		s.metricsGatherer = gatherer
+	}
+}
 
 // Option to create an additional https server with mTLS configuration.
 // Used for getting the scrape config with real secret values.
@@ -73,6 +88,21 @@ func WithTLSConfig(tlsConfig *tls.Config, httpsListenAddr string) Option {
 
 		s.httpsServer = &http.Server{Addr: httpsListenAddr, Handler: httpsRouter, ReadHeaderTimeout: 90 * time.Second, TLSConfig: tlsConfig}
 	}
+}
+
+func WithInsecureAuthSecrets() Option {
+	return func(s *Server) {
+		s.allowInsecureAuthSecrets = true
+	}
+}
+
+// metricsHandler returns the HTTP handler serving /metrics. It uses the configured
+// gatherer if one was provided, otherwise the global Prometheus default.
+func (s *Server) metricsHandler() http.Handler {
+	if s.metricsGatherer != nil {
+		return promhttp.HandlerFor(s.metricsGatherer, promhttp.HandlerOpts{})
+	}
+	return promhttp.Handler()
 }
 
 func (s *Server) setRouter(router *gin.Engine) {
@@ -92,7 +122,11 @@ func (s *Server) setRouter(router *gin.Engine) {
 	router.GET("/scrape_configs", s.ScrapeConfigsHandler)
 	router.GET("/jobs", s.JobsHandler)
 	router.GET("/jobs/:job_id/targets", s.TargetsHandler)
-	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
+	// The handler is resolved per request so that the gatherer configured via
+	// WithMetricsGatherer (applied after the router is built) is honored.
+	router.GET("/metrics", func(c *gin.Context) {
+		s.metricsHandler().ServeHTTP(c.Writer, c.Request)
+	})
 	router.GET("/livez", s.LivenessProbeHandler)
 	router.GET("/readyz", s.ReadinessProbeHandler)
 	registerPprof(router.Group("/debug/pprof/"))
@@ -118,6 +152,12 @@ func NewServer(log logr.Logger, allocator allocation.Allocator, listenAddr strin
 
 	for _, opt := range options {
 		opt(s)
+	}
+
+	if s.allowInsecureAuthSecrets {
+		// TODO: Change to Warn level after migrating away from logr.
+		s.logger.Info("allowInsecureAuthSecrets is enabled - auth secret values will be served over plain HTTP. " +
+			"Only use this when the target allocator endpoint is secured by a service mesh or equivalent transport-level security.")
 	}
 
 	return s, nil
@@ -149,17 +189,17 @@ func (s *Server) ShutdownHTTPS(ctx context.Context) error {
 // for these actions. Adding this as a fix until the original issue with prometheus unmarshaling is fixed -
 // https://github.com/prometheus/prometheus/issues/12534
 func RemoveRegexFromRelabelAction(jsonConfig []byte) ([]byte, error) {
-	var jobToScrapeConfig map[string]interface{}
+	var jobToScrapeConfig map[string]any
 	err := json.Unmarshal(jsonConfig, &jobToScrapeConfig)
 	if err != nil {
 		return nil, err
 	}
 	for _, scrapeConfig := range jobToScrapeConfig {
-		scrapeConfig := scrapeConfig.(map[string]interface{})
+		scrapeConfig := scrapeConfig.(map[string]any)
 		if scrapeConfig["relabel_configs"] != nil {
-			relabelConfigs := scrapeConfig["relabel_configs"].([]interface{})
+			relabelConfigs := scrapeConfig["relabel_configs"].([]any)
 			for _, relabelConfig := range relabelConfigs {
-				relabelConfig := relabelConfig.(map[string]interface{})
+				relabelConfig := relabelConfig.(map[string]any)
 				// Dropping regex key from the map since unmarshalling this on the client(metrics_receiver.go) results in error
 				// because of the bug here - https://github.com/prometheus/prometheus/issues/12534
 				if relabelConfig["action"] == "keepequal" || relabelConfig["action"] == "dropequal" {
@@ -168,9 +208,9 @@ func RemoveRegexFromRelabelAction(jsonConfig []byte) ([]byte, error) {
 			}
 		}
 		if scrapeConfig["metric_relabel_configs"] != nil {
-			metricRelabelConfigs := scrapeConfig["metric_relabel_configs"].([]interface{})
+			metricRelabelConfigs := scrapeConfig["metric_relabel_configs"].([]any)
 			for _, metricRelabelConfig := range metricRelabelConfigs {
-				metricRelabelConfig := metricRelabelConfig.(map[string]interface{})
+				metricRelabelConfig := metricRelabelConfig.(map[string]any)
 				// Dropping regex key from the map since unmarshalling this on the client(metrics_receiver.go) results in error
 				// because of the bug here - https://github.com/prometheus/prometheus/issues/12534
 				if metricRelabelConfig["action"] == "keepequal" || metricRelabelConfig["action"] == "dropequal" {
@@ -240,7 +280,7 @@ func (s *Server) ScrapeConfigsHandler(c *gin.Context) {
 	}
 	s.mtx.RLock()
 	result := s.scrapeConfigResponse
-	if c.Request.TLS != nil {
+	if c.Request.TLS != nil || s.allowInsecureAuthSecrets {
 		result = s.ScrapeConfigMarshalledSecretResponse
 	}
 	s.mtx.RUnlock()
@@ -277,7 +317,7 @@ func (s *Server) JobsHandler(c *gin.Context) {
 	s.jsonHandler(c.Writer, displayData)
 }
 
-func (s *Server) LivenessProbeHandler(c *gin.Context) {
+func (*Server) LivenessProbeHandler(c *gin.Context) {
 	c.Status(http.StatusOK)
 }
 
@@ -313,7 +353,7 @@ func (s *Server) IndexHandler(c *gin.Context) {
 			for k := range s.allocator.Collectors() {
 				collectorNames = append(collectorNames, k)
 			}
-			sort.Strings(collectorNames)
+			slices.Sort(collectorNames)
 
 			for _, colName := range collectorNames {
 				jobCount := strconv.Itoa(s.getJobCountForCollector(colName))
@@ -464,7 +504,7 @@ func (s *Server) JobsHTMLHandler(c *gin.Context) {
 			for k := range jobs {
 				jobNames = append(jobNames, k)
 			}
-			sort.Strings(jobNames)
+			slices.Sort(jobNames)
 
 			for _, j := range jobNames {
 				v := jobs[j]
@@ -482,6 +522,7 @@ func jobAnchorLink(jobId string) Cell {
 		Text: jobId,
 	}
 }
+
 func (s *Server) JobHTMLHandler(c *gin.Context) {
 	c.Writer.Header().Set("X-Content-Type-Options", "nosniff")
 	c.Writer.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -510,7 +551,7 @@ func (s *Server) JobHTMLHandler(c *gin.Context) {
 			for _, v := range s.allocator.Collectors() {
 				collectorNames = append(collectorNames, v.Name)
 			}
-			sort.Strings(collectorNames)
+			slices.Sort(collectorNames)
 			for _, colName := range collectorNames {
 				count := 0
 				for _, target := range targets {
@@ -595,6 +636,7 @@ func scrapeConfigAnchorLink() Cell {
 		Text: "Scrape Configs",
 	}
 }
+
 func (s *Server) ScrapeConfigsHTMLHandler(c *gin.Context) {
 	c.Writer.Header().Set("X-Content-Type-Options", "nosniff")
 	c.Writer.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -602,9 +644,9 @@ func (s *Server) ScrapeConfigsHTMLHandler(c *gin.Context) {
 	WriteHTMLPageHeader(c.Writer, HeaderData{
 		Title: "OpenTelemetry Target Allocator - Scrape Configs",
 	})
-	//s.scrapeConfigResponse
+	// s.scrapeConfigResponse
 	// Marshal the scrape config to JSON
-	scrapeConfigs := make(map[string]interface{})
+	scrapeConfigs := make(map[string]any)
 	err := json.Unmarshal(s.scrapeConfigResponse, &scrapeConfigs)
 	if err != nil {
 		s.errorHandler(c.Writer, err)
@@ -648,7 +690,7 @@ func (s *Server) TargetsHandler(c *gin.Context) {
 		targets := GetAllTargetsByCollectorAndJob(s.allocator, q[0], jobId)
 		// Displays empty list if nothing matches
 		if len(targets) == 0 {
-			s.jsonHandler(c.Writer, []interface{}{})
+			s.jsonHandler(c.Writer, []any{})
 			return
 		}
 		s.jsonHandler(c.Writer, targets)
@@ -660,7 +702,7 @@ func (s *Server) errorHandler(w http.ResponseWriter, err error) {
 	s.jsonHandler(w, err)
 }
 
-func (s *Server) jsonHandler(w http.ResponseWriter, data interface{}) {
+func (s *Server) jsonHandler(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	err := json.NewEncoder(w).Encode(data)
 	if err != nil {
@@ -674,14 +716,14 @@ func (s *Server) sortedTargetItems() []*target.Item {
 	for _, v := range s.allocator.TargetItems() {
 		targetItems = append(targetItems, v)
 	}
-	sort.Slice(targetItems, func(i, j int) bool {
-		return targetItems[i].Hash() < targetItems[j].Hash()
+	slices.SortFunc(targetItems, func(i, j *target.Item) int {
+		return cmp.Compare(i.Hash(), j.Hash())
 	})
 	return targetItems
 }
 
 func (s *Server) getScrapeConfigCount() int {
-	scrapeConfigs := make(map[string]interface{})
+	scrapeConfigs := make(map[string]any)
 	err := json.Unmarshal(s.scrapeConfigResponse, &scrapeConfigs)
 	if err != nil {
 		return 0
@@ -731,7 +773,7 @@ func GetAllTargetsByJob(allocator allocation.Allocator, job string) map[string]c
 }
 
 // GetAllTargetsByCollector returns all the targets for a given collector and job.
-func GetAllTargetsByCollectorAndJob(allocator allocation.Allocator, collectorName string, jobName string) []*targetJSON {
+func GetAllTargetsByCollectorAndJob(allocator allocation.Allocator, collectorName, jobName string) []*targetJSON {
 	items := allocator.GetTargetsForCollectorAndJob(collectorName, jobName)
 	targets := make([]*targetJSON, len(items))
 	for i, item := range items {

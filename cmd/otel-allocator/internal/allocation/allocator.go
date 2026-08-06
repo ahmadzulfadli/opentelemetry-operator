@@ -6,6 +6,7 @@ package allocation
 import (
 	"context"
 	"errors"
+	"maps"
 	"runtime"
 	"slices"
 	"sync"
@@ -92,17 +93,11 @@ type allocator struct {
 
 	log logr.Logger
 
-	filter                Filter
 	targetsPerCollector   metric.Int64Gauge
 	collectorsAllocatable metric.Int64Gauge
 	timeToAssign          metric.Float64Histogram
 	targetsRemaining      metric.Int64Gauge
 	targetsUnassigned     metric.Int64Gauge
-}
-
-// SetFilter sets the filtering hook to use.
-func (a *allocator) SetFilter(filter Filter) {
-	a.filter = filter
 }
 
 // SetFallbackStrategy sets the fallback strategy to use.
@@ -119,10 +114,6 @@ func (a *allocator) SetTargets(targets []*target.Item) {
 		a.timeToAssign.Record(context.Background(), time.Since(begin).Seconds(), metric.WithAttributes(attribute.String("method", "SetTargets"), attribute.String("strategy", a.strategy.GetName())))
 	}()
 
-	if a.filter != nil {
-		targets = a.filter.Apply(targets)
-	}
-
 	a.targetsRemaining.Record(context.Background(), int64(len(targets)))
 	concurrency := runtime.NumCPU() * 2 // determined experimentally
 	targetMap := buildTargetMap(targets, concurrency)
@@ -135,6 +126,42 @@ func (a *allocator) SetTargets(targets []*target.Item) {
 	// If there are any additions or removals
 	if len(targetsDiff.Additions()) != 0 || len(targetsDiff.Removals()) != 0 {
 		a.handleTargets(targetsDiff)
+	}
+	a.refreshExistingTargetLabels(targetMap)
+}
+
+// refreshExistingTargetLabels replaces the stored Item of every target that is present
+// both before and after this update, so that what we serve reflects the latest
+// discovery rather than the first sighting.
+//
+// A target's identity is the hash of its post-relabel labels, which excludes meta
+// labels (see target.HashFromBuilder), mirroring Prometheus: meta labels are
+// discarded when the final label set is computed, so two targets differing only in
+// them are the same scrape target. That means a target can keep its identity while
+// the meta labels discovery reports for it change — a DaemonSet pod with
+// hostNetwork replaced on the same host address, for instance, keeps its address
+// and its relabeled labels while its pod name and UID change. The diff below sees
+// no change for such a target, but Item.Labels is not internal bookkeeping: we
+// serve it verbatim on the HTTP SD endpoint, and the collector turns those meta
+// labels into resource attributes. Keeping the old Item would attribute the new
+// pod's metrics to the departed one, forever, since the hash never moves again.
+//
+// Prometheus does the same thing for the same reason, overwriting a retained
+// target's discovered labels on every sync:
+// https://github.com/prometheus/prometheus/blob/v3.12.0/scrape/scrape.go#L491
+//
+// The collector assignment lives on the Item, so it has to carry over. Dropping it
+// would make the least-weighted strategy treat every surviving target as newly
+// assigned and reshuffle the whole set on each update, and would leave the
+// per-collector target counts unbalanced when the target is eventually removed.
+func (a *allocator) refreshExistingTargetLabels(targetMap map[target.ItemHash]*target.Item) {
+	for hash, newItem := range targetMap {
+		existing, ok := a.targetItems[hash]
+		if !ok {
+			continue
+		}
+		newItem.CollectorName = existing.CollectorName
+		a.targetItems[hash] = newItem
 	}
 }
 
@@ -161,7 +188,7 @@ func (a *allocator) SetCollectors(collectors map[string]*Collector) {
 	}
 }
 
-func (a *allocator) GetTargetsForCollectorAndJob(collector string, job string) []*target.Item {
+func (a *allocator) GetTargetsForCollectorAndJob(collector, job string) []*target.Item {
 	a.m.RLock()
 	defer a.m.RUnlock()
 	if _, ok := a.targetItemsPerJobPerCollector[collector]; !ok {
@@ -185,9 +212,7 @@ func (a *allocator) TargetItems() map[target.ItemHash]*target.Item {
 	a.m.RLock()
 	defer a.m.RUnlock()
 	targetItemsCopy := make(map[target.ItemHash]*target.Item)
-	for k, v := range a.targetItems {
-		targetItemsCopy[k] = v
-	}
+	maps.Copy(targetItemsCopy, a.targetItems)
 	return targetItemsCopy
 }
 
@@ -196,9 +221,7 @@ func (a *allocator) Collectors() map[string]*Collector {
 	a.m.RLock()
 	defer a.m.RUnlock()
 	collectorsCopy := make(map[string]*Collector)
-	for k, v := range a.collectors {
-		collectorsCopy[k] = v
-	}
+	maps.Copy(collectorsCopy, a.collectors)
 	return collectorsCopy
 }
 
@@ -218,16 +241,16 @@ func (a *allocator) handleTargets(diff diff.Changes[target.ItemHash, *target.Ite
 	var assignmentErrors []error
 	for k, item := range diff.Additions() {
 		// Do nothing if the item is already there
-		if _, ok := a.targetItems[k]; ok {
+		_, ok := a.targetItems[k]
+		if ok {
 			continue
-		} else {
-			// TODO: track target -> collector relationship in a separate map
-			item.CollectorName = ""
-			// Add item to item pool and assign a collector
-			err := a.addTargetToTargetItems(item)
-			if err != nil {
-				assignmentErrors = append(assignmentErrors, err)
-			}
+		}
+		// TODO: track target -> collector relationship in a separate map
+		item.CollectorName = ""
+		// Add item to item pool and assign a collector
+		err := a.addTargetToTargetItems(item)
+		if err != nil {
+			assignmentErrors = append(assignmentErrors, err)
 		}
 	}
 
@@ -261,6 +284,7 @@ func (a *allocator) addTargetToTargetItems(tg *target.Item) error {
 	tg.CollectorName = colOwner.Name
 	a.addCollectorTargetItemMapping(tg)
 	a.collectors[colOwner.Name].NumTargets++
+	a.collectors[colOwner.Name].TargetsPerJob[tg.JobName]++
 	a.targetsPerCollector.Record(context.Background(), int64(a.collectors[colOwner.String()].NumTargets), metric.WithAttributes(attribute.String("collector_name", colOwner.String()), attribute.String("strategy", a.strategy.GetName())))
 	return nil
 }
@@ -276,6 +300,10 @@ func (a *allocator) unassignTargetItem(item *target.Item) {
 		return
 	}
 	c.NumTargets--
+	c.TargetsPerJob[item.JobName]--
+	if c.TargetsPerJob[item.JobName] == 0 {
+		delete(c.TargetsPerJob, item.JobName)
+	}
 	a.targetsPerCollector.Record(context.Background(), int64(c.NumTargets), metric.WithAttributes(attribute.String("collector_name", item.CollectorName), attribute.String("strategy", a.strategy.GetName())))
 	delete(a.targetItemsPerJobPerCollector[item.CollectorName][item.JobName], item.Hash())
 	if len(a.targetItemsPerJobPerCollector[item.CollectorName][item.JobName]) == 0 {

@@ -1,0 +1,72 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package webhook_test
+
+import (
+	"context"
+	"fmt"
+	"math/rand/v2"
+	"os"
+	"path/filepath"
+	"strconv"
+	"testing"
+
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlenvtest "sigs.k8s.io/controller-runtime/pkg/envtest"
+
+	"github.com/open-telemetry/opentelemetry-operator/apis/v1beta1"
+	"github.com/open-telemetry/opentelemetry-operator/internal/testenv"
+)
+
+var k8sClient client.Client
+
+func TestMain(m *testing.M) {
+	sch := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(sch))
+	utilruntime.Must(v1beta1.AddToScheme(sch))
+
+	tenv, err := testenv.Start(&ctrlenvtest.Environment{
+		CRDDirectoryPaths: []string{filepath.Join("..", "..", "config", "crd", "bases")},
+	}, sch)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	k8sClient = tenv.Client
+
+	code := m.Run()
+
+	if err := tenv.Stop(); err != nil {
+		fmt.Println(err)
+	}
+	os.Exit(code)
+}
+
+func prepareNamespace(t *testing.T, ctx context.Context) string {
+	t.Helper()
+
+	name := "test-namespace-" + strconv.Itoa(rand.Int())
+	namespace := &v1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+	}
+
+	err := k8sClient.Create(ctx, namespace)
+	if err != nil {
+		t.Fatalf("failed to Create namespace: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, namespace); err != nil {
+			t.Fatalf("failed to Delete namespace: %v", err)
+		}
+	})
+	return name
+}

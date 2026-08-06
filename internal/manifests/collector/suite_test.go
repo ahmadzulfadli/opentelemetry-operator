@@ -12,7 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/uuid"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/open-telemetry/opentelemetry-operator/apis/v1beta1"
@@ -67,7 +67,6 @@ func paramsWithMode(mode v1beta1.Mode) manifests.Params {
 			},
 			Spec: v1beta1.OpenTelemetryCollectorSpec{
 				OpenTelemetryCommonFields: v1beta1.OpenTelemetryCommonFields{
-
 					Image: "ghcr.io/open-telemetry/opentelemetry-operator/opentelemetry-operator:0.47.0",
 					Ports: []v1beta1.PortsSpec{
 						{
@@ -89,11 +88,11 @@ func paramsWithMode(mode v1beta1.Mode) manifests.Params {
 			},
 		},
 		Log:      testLogger,
-		Recorder: record.NewFakeRecorder(10),
+		Recorder: events.NewFakeRecorder(10),
 	}
 }
 
-func newParams(taContainerImage string, file string, cfg *config.Config) (manifests.Params, error) {
+func newParams(taContainerImage, file string, cfg *config.Config) (manifests.Params, error) {
 	replicas := int32(1)
 	var configYAML []byte
 	var err error

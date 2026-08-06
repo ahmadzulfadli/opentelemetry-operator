@@ -15,6 +15,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-operator/internal/manifests"
 	"github.com/open-telemetry/opentelemetry-operator/internal/manifests/manifestutils"
 	"github.com/open-telemetry/opentelemetry-operator/internal/naming"
+	"github.com/open-telemetry/opentelemetry-operator/internal/otelconfig"
 )
 
 var monitoringPortName = "monitoring"
@@ -56,7 +57,7 @@ func PodMonitor(params manifests.Params) (*monitoringv1.PodMonitor, error) {
 }
 
 func metricsEndpointsFromConfig(logger logr.Logger, otelcol v1beta1.OpenTelemetryCollector) []monitoringv1.PodMetricsEndpoint {
-	exporterPorts, err := otelcol.Spec.Config.GetExporterPorts(logger)
+	exporterPorts, err := otelconfig.GetExporterPorts(&otelcol.Spec.Config, logger)
 	if err != nil {
 		logger.Error(err, "couldn't build endpoints to podMonitors from configuration")
 		return []monitoringv1.PodMetricsEndpoint{}
@@ -79,13 +80,14 @@ func shouldCreatePodMonitor(params manifests.Params) bool {
 		"params.OtelCol.namespace", params.OtelCol.Namespace,
 	)
 
-	if !params.OtelCol.Spec.Observability.Metrics.EnableMetrics {
+	switch {
+	case !params.OtelCol.Spec.Observability.Metrics.EnableMetrics:
 		l.V(2).Info("Metrics disabled for this OTEL Collector. PodMonitor will not ve created")
 		return false
-	} else if params.Config.PrometheusCRAvailability == prometheus.NotAvailable {
+	case params.Config.PrometheusCRAvailability == prometheus.NotAvailable:
 		l.V(2).Info("Cannot enable PodMonitor when prometheus CRDs are unavailable")
 		return false
-	} else if params.OtelCol.Spec.Mode != v1beta1.ModeSidecar {
+	case params.OtelCol.Spec.Mode != v1beta1.ModeSidecar:
 		l.V(2).Info("Not using sidecar mode. PodMonitor will not be created")
 		return false
 	}

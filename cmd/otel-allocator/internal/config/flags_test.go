@@ -19,27 +19,28 @@ func TestGetFlagSet(t *testing.T) {
 	assert.NotNil(t, fs.Lookup(listenAddrFlagName), "Flag %s not found", listenAddrFlagName)
 	assert.NotNil(t, fs.Lookup(prometheusCREnabledFlagName), "Flag %s not found", prometheusCREnabledFlagName)
 	assert.NotNil(t, fs.Lookup(kubeConfigPathFlagName), "Flag %s not found", kubeConfigPathFlagName)
+	assert.NotNil(t, fs.Lookup(allowInsecureAuthSecretsFlagName), "Flag %s not found", allowInsecureAuthSecretsFlagName)
 }
 
 func TestFlagGetters(t *testing.T) {
 	tests := []struct {
 		name          string
 		flagArgs      []string
-		expectedValue interface{}
+		expectedValue any
 		expectedErr   bool
-		getterFunc    func(*pflag.FlagSet) (interface{}, error)
+		getterFunc    func(*pflag.FlagSet) (any, error)
 	}{
 		{
 			name:          "GetConfigFilePath",
 			flagArgs:      []string{"--" + configFilePathFlagName, "/path/to/config"},
 			expectedValue: "/path/to/config",
-			getterFunc:    func(fs *pflag.FlagSet) (interface{}, error) { return getConfigFilePath(fs) },
+			getterFunc:    func(fs *pflag.FlagSet) (any, error) { return getConfigFilePath(fs) },
 		},
 		{
 			name:          "GetKubeConfigFilePath",
 			flagArgs:      []string{"--" + kubeConfigPathFlagName, filepath.Join("~", ".kube", "config")},
 			expectedValue: filepath.Join("~", ".kube", "config"),
-			getterFunc: func(fs *pflag.FlagSet) (interface{}, error) {
+			getterFunc: func(fs *pflag.FlagSet) (any, error) {
 				value, _, err := getKubeConfigFilePath(fs)
 				return value, err
 			},
@@ -48,7 +49,7 @@ func TestFlagGetters(t *testing.T) {
 			name:          "GetListenAddr",
 			flagArgs:      []string{"--" + listenAddrFlagName, ":8081"},
 			expectedValue: ":8081",
-			getterFunc: func(fs *pflag.FlagSet) (interface{}, error) {
+			getterFunc: func(fs *pflag.FlagSet) (any, error) {
 				value, _, err := getListenAddr(fs)
 				return value, err
 			},
@@ -57,7 +58,7 @@ func TestFlagGetters(t *testing.T) {
 			name:          "GetPrometheusCREnabled",
 			flagArgs:      []string{"--" + prometheusCREnabledFlagName, "true"},
 			expectedValue: true,
-			getterFunc: func(fs *pflag.FlagSet) (interface{}, error) {
+			getterFunc: func(fs *pflag.FlagSet) (any, error) {
 				value, _, err := getPrometheusCREnabled(fs)
 				return value, err
 			},
@@ -66,13 +67,13 @@ func TestFlagGetters(t *testing.T) {
 			name:        "InvalidFlag",
 			flagArgs:    []string{"--invalid-flag", "value"},
 			expectedErr: true,
-			getterFunc:  func(fs *pflag.FlagSet) (interface{}, error) { return getConfigFilePath(fs) },
+			getterFunc:  func(fs *pflag.FlagSet) (any, error) { return getConfigFilePath(fs) },
 		},
 		{
 			name:          "HttpsServer",
 			flagArgs:      []string{"--" + httpsEnabledFlagName, "true"},
 			expectedValue: true,
-			getterFunc: func(fs *pflag.FlagSet) (interface{}, error) {
+			getterFunc: func(fs *pflag.FlagSet) (any, error) {
 				value, _, err := getHttpsEnabled(fs)
 				return value, err
 			},
@@ -81,8 +82,17 @@ func TestFlagGetters(t *testing.T) {
 			name:          "HttpsServerKey",
 			flagArgs:      []string{"--" + httpsTLSKeyFilePathFlagName, "/path/to/tls.key"},
 			expectedValue: "/path/to/tls.key",
-			getterFunc: func(fs *pflag.FlagSet) (interface{}, error) {
+			getterFunc: func(fs *pflag.FlagSet) (any, error) {
 				value, _, err := getHttpsTLSKeyFilePath(fs)
+				return value, err
+			},
+		},
+		{
+			name:          "AllowInsecureAuthSecrets",
+			flagArgs:      []string{"--" + allowInsecureAuthSecretsFlagName, "true"},
+			expectedValue: true,
+			getterFunc: func(fs *pflag.FlagSet) (any, error) {
+				value, _, err := getAllowInsecureAuthSecrets(fs)
 				return value, err
 			},
 		},

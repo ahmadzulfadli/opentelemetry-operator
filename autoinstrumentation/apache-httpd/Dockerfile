@@ -2,7 +2,7 @@
 ############################
 # STEP 1 download the webserver agent 
 ############################
-FROM alpine:latest AS agent
+FROM alpine:latest@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS agent
 
 ARG version
 
@@ -16,7 +16,7 @@ RUN unzip -p opentelemetry-webserver-sdk-x64-linux.tgz | tar -zx -C agent
 ############################
 # STEP 2 download the webserver agent 
 ############################
-FROM alpine:latest
+FROM alpine:latest@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 
 COPY --from=agent /opt/opentelemetry/agent/opentelemetry-webserver-sdk /opt/opentelemetry
 

@@ -6,11 +6,14 @@ package controllers
 
 import (
 	"context"
-	"sort"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/go-logr/logr"
 	routev1 "github.com/openshift/api/route/v1"
+	securityv1 "github.com/openshift/api/security/v1"
+	"github.com/openshift/library-go/pkg/security/uid"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -23,14 +26,16 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/open-telemetry/opentelemetry-operator/apis/v1alpha1"
 	"github.com/open-telemetry/opentelemetry-operator/apis/v1beta1"
+	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/gatewayapi"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/openshift"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/prometheus"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/rbac"
@@ -47,17 +52,15 @@ import (
 
 const resourceOwnerKey = ".metadata.owner"
 
-var (
-	ownedClusterObjectTypes = []client.Object{
-		&rbacv1.ClusterRole{},
-		&rbacv1.ClusterRoleBinding{},
-	}
-)
+var ownedClusterObjectTypes = []client.Object{
+	&rbacv1.ClusterRole{},
+	&rbacv1.ClusterRoleBinding{},
+}
 
 // OpenTelemetryCollectorReconciler reconciles a OpenTelemetryCollector object.
 type OpenTelemetryCollectorReconciler struct {
 	client.Client
-	recorder record.EventRecorder
+	recorder events.EventRecorder
 	scheme   *runtime.Scheme
 	log      logr.Logger
 	config   config.Config
@@ -68,7 +71,7 @@ type OpenTelemetryCollectorReconciler struct {
 // Params is the set of options to build a new OpenTelemetryCollectorReconciler.
 type Params struct {
 	client.Client
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 	Scheme   *runtime.Scheme
 	Log      logr.Logger
 	Config   config.Config
@@ -89,9 +92,7 @@ func (r *OpenTelemetryCollectorReconciler) findOtelOwnedObjects(ctx context.Cont
 		if err != nil {
 			return nil, err
 		}
-		for uid, object := range objs {
-			ownedObjects[uid] = object
-		}
+		maps.Copy(ownedObjects, objs)
 		// save Collector ConfigMaps into a separate slice, we need to do additional filtering on them
 		switch objectType.(type) {
 		case *corev1.ConfigMap:
@@ -128,9 +129,7 @@ func (r *OpenTelemetryCollectorReconciler) findClusterRoleObjects(ctx context.Co
 		if err != nil {
 			return nil, err
 		}
-		for uid, object := range objs {
-			ownedObjects[uid] = object
-		}
+		maps.Copy(ownedObjects, objs)
 	}
 	return ownedObjects, nil
 }
@@ -140,11 +139,17 @@ func (r *OpenTelemetryCollectorReconciler) findClusterRoleObjects(ctx context.Co
 // Fundamentally, this just sorts by time created and picks configVersionsToKeep latest ones.
 func getCollectorConfigMapsToKeep(configVersionsToKeep int, configMaps []*corev1.ConfigMap) []*corev1.ConfigMap {
 	configVersionsToKeep = max(1, configVersionsToKeep)
-	sort.Slice(configMaps, func(i, j int) bool {
-		iTime := configMaps[i].GetCreationTimestamp().Time
-		jTime := configMaps[j].GetCreationTimestamp().Time
+	slices.SortFunc(configMaps, func(i, j *corev1.ConfigMap) int {
+		iTime := i.GetCreationTimestamp().Time
+		jTime := j.GetCreationTimestamp().Time
 		// sort the ConfigMaps newest to oldest
-		return iTime.After(jTime)
+		if jTime.Before(iTime) {
+			return -1
+		}
+		if jTime.After(iTime) {
+			return 1
+		}
+		return 0
 	})
 
 	configMapsToKeep := min(configVersionsToKeep, len(configMaps))
@@ -153,6 +158,10 @@ func getCollectorConfigMapsToKeep(configVersionsToKeep int, configMaps []*corev1
 }
 
 func (r *OpenTelemetryCollectorReconciler) GetParams(ctx context.Context, instance v1beta1.OpenTelemetryCollector) (manifests.Params, error) {
+	if r.config.OpenShiftRoutesAvailability == openshift.RoutesAvailable {
+		r.defaultFSGroupOnOpenShift(ctx, &instance)
+	}
+
 	p := manifests.Params{
 		Config:   r.config,
 		Client:   r.Client,
@@ -172,11 +181,52 @@ func (r *OpenTelemetryCollectorReconciler) GetParams(ctx context.Context, instan
 	return p, nil
 }
 
+// defaultFSGroupOnOpenShift sets podSecurityContext.fsGroup from the namespace's
+// supplemental-groups or UID range annotation when running on OpenShift and no
+// explicit fsGroup is configured.
+//
+// On OpenShift, the restricted SCC normally injects fsGroup from the namespace range,
+// but more permissive SCCs (e.g. anyuid) do not. Explicitly setting fsGroup ensures
+// PVC volumes are group-writable regardless of which SCC is selected.
+//
+// See: https://github.com/migtools/crane/blob/440432b/cmd/transfer-pvc/transfer-pvc.go#L554
+func (r *OpenTelemetryCollectorReconciler) defaultFSGroupOnOpenShift(ctx context.Context, instance *v1beta1.OpenTelemetryCollector) {
+	if instance.Spec.PodSecurityContext != nil && instance.Spec.PodSecurityContext.FSGroup != nil {
+		return
+	}
+
+	ns := &corev1.Namespace{}
+	if err := r.Get(ctx, types.NamespacedName{Name: instance.Namespace}, ns); err != nil {
+		r.log.Info("unable to fetch namespace for fsGroup defaulting", "namespace", instance.Namespace, "error", err)
+		return
+	}
+
+	rangeAnnotation := ns.Annotations[securityv1.SupplementalGroupsAnnotation]
+	if rangeAnnotation == "" {
+		rangeAnnotation = ns.Annotations[securityv1.UIDRangeAnnotation]
+	}
+	if rangeAnnotation == "" {
+		return
+	}
+
+	block, err := uid.ParseBlock(rangeAnnotation)
+	if err != nil {
+		r.log.Info("unable to parse group range annotation", "annotation", rangeAnnotation, "error", err)
+		return
+	}
+
+	fsGroup := int64(block.Start)
+	if instance.Spec.PodSecurityContext == nil {
+		instance.Spec.PodSecurityContext = &corev1.PodSecurityContext{}
+	}
+	instance.Spec.PodSecurityContext.FSGroup = &fsGroup
+}
+
 func (r *OpenTelemetryCollectorReconciler) getTargetAllocator(ctx context.Context, params manifests.Params) (*v1alpha1.TargetAllocator, error) {
 	if taName, ok := params.OtelCol.GetLabels()[constants.LabelTargetAllocator]; ok {
 		targetAllocator := &v1alpha1.TargetAllocator{}
 		taKey := client.ObjectKey{Name: taName, Namespace: params.OtelCol.GetNamespace()}
-		err := r.Client.Get(ctx, taKey, targetAllocator)
+		err := r.Get(ctx, taKey, targetAllocator)
 		if err != nil {
 			return nil, err
 		}
@@ -206,23 +256,28 @@ func NewReconciler(p Params) *OpenTelemetryCollectorReconciler {
 	return r
 }
 
-// +kubebuilder:rbac:groups="",resources=pods;configmaps;services;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=configmaps;serviceaccounts;services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=apps,resources=daemonsets;deployments;statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;create;update
+// +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors;podmonitors,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments/finalizers,verbs=get;watch;update;patch
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes;routes/custom-host,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=config.openshift.io,resources=infrastructures;infrastructures/status,verbs=get;list;watch
+// +kubebuilder:rbac:groups=config.openshift.io,resources=infrastructures;infrastructures/status;apiservers,verbs=get;list;watch
 // +kubebuilder:rbac:groups=opentelemetry.io,resources=opentelemetrycollectors,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=opentelemetry.io,resources=opentelemetrycollectors/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=opentelemetry.io,resources=opentelemetrycollectors/finalizers,verbs=get;update;patch
 // +kubebuilder:rbac:groups=opentelemetry.io,resources=targetallocators,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=opentelemetry.io,resources=targetallocators/finalizers,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=opentelemetry.io,resources=targetallocators/finalizers,verbs=update
 // +kubebuilder:rbac:urls=/version,verbs=get
 
 // Reconcile the current state of an OpenTelemetry collector resource with the desired state.
@@ -248,25 +303,10 @@ func (r *OpenTelemetryCollectorReconciler) Reconcile(ctx context.Context, req ct
 	}
 
 	// We have a deletion, short circuit and let the deletion happen
-	if deletionTimestamp := instance.GetDeletionTimestamp(); deletionTimestamp != nil {
-		if controllerutil.ContainsFinalizer(&instance, collectorFinalizer) {
-			// If the finalization logic fails, don't remove the finalizer so
-			// that we can retry during the next reconciliation.
-			if err = r.finalizeCollector(ctx, params); err != nil {
-				return ctrl.Result{}, err
-			}
-
-			// Once all finalizers have been
-			// removed, the object will be deleted.
-			if controllerutil.RemoveFinalizer(&instance, collectorFinalizer) {
-				err = r.Update(ctx, &instance)
-				if err != nil {
-					return ctrl.Result{}, err
-				}
-			}
-		}
-
-		return ctrl.Result{}, nil
+	// Remove finalizer if RBAC permission not available
+	deletionTimestamp, err := removeFinalizer(ctx, r, params, &instance)
+	if err != nil || deletionTimestamp != nil {
+		return ctrl.Result{}, err
 	}
 
 	if instance.Spec.ManagementState == v1beta1.ManagementStateUnmanaged {
@@ -377,6 +417,10 @@ func (r *OpenTelemetryCollectorReconciler) GetOwnedResourceTypes() []client.Obje
 		ownedResources = append(ownedResources, &routev1.Route{})
 	}
 
+	if r.config.GatewayAPIsAvailability == gatewayapi.ApiAvailable {
+		ownedResources = append(ownedResources, &gatewayv1.HTTPRoute{})
+	}
+
 	return ownedResources
 }
 
@@ -399,4 +443,27 @@ func maybeAddFinalizer(params manifests.Params, instance *v1beta1.OpenTelemetryC
 		return controllerutil.AddFinalizer(instance, collectorFinalizer)
 	}
 	return false
+}
+
+func removeFinalizer(ctx context.Context, r *OpenTelemetryCollectorReconciler, params manifests.Params, instance *v1beta1.OpenTelemetryCollector) (*metav1.Time, error) {
+	deletionTimestamp := instance.GetDeletionTimestamp()
+	if deletionTimestamp != nil || params.Config.CreateRBACPermissions != rbac.Available {
+		if controllerutil.ContainsFinalizer(instance, collectorFinalizer) {
+			// If the finalization logic fails, don't remove the finalizer so
+			// that we can retry during the next reconciliation.
+			if err := r.finalizeCollector(ctx, params); err != nil {
+				return deletionTimestamp, err
+			}
+
+			// Once all finalizers have been
+			// removed, the object will be deleted.
+			if controllerutil.RemoveFinalizer(instance, collectorFinalizer) {
+				err := r.Update(ctx, instance)
+				if err != nil {
+					return deletionTimestamp, err
+				}
+			}
+		}
+	}
+	return deletionTimestamp, nil
 }

@@ -1,3 +1,6 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package data
 
 import (
@@ -17,6 +20,11 @@ import (
 var _ json.Marshaler = &Agent{}
 
 type InstanceId uuid.UUID
+
+type attribute struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
 
 // Agent represents a connected Agent.
 type Agent struct {
@@ -54,14 +62,35 @@ type Agent struct {
 
 func (agent *Agent) MarshalJSON() ([]byte, error) {
 	return json.Marshal(&struct {
-		Status          *protobufs.AgentToServer `json:"status"`
-		StartedAt       time.Time                `json:"started_at"`
-		EffectiveConfig map[string]string        `json:"effective_config"`
+		Status                   *protobufs.AgentToServer `json:"status"`
+		StartedAt                time.Time                `json:"started_at"`
+		EffectiveConfig          map[string]string        `json:"effective_config"`
+		NonIdentifyingAttributes []attribute              `json:"non_identifying_attributes"`
 	}{
-		Status:          agent.Status,
-		StartedAt:       agent.StartedAt,
-		EffectiveConfig: agent.EffectiveConfig,
+		Status:                   agent.Status,
+		StartedAt:                agent.StartedAt,
+		EffectiveConfig:          agent.EffectiveConfig,
+		NonIdentifyingAttributes: nonIdentifyingAttributes(agent.Status),
 	})
+}
+
+func nonIdentifyingAttributes(status *protobufs.AgentToServer) []attribute {
+	if status == nil || status.AgentDescription == nil {
+		return nil
+	}
+
+	attrs := status.AgentDescription.GetNonIdentifyingAttributes()
+	out := make([]attribute, 0, len(attrs))
+	for _, attr := range attrs {
+		if attr == nil {
+			continue
+		}
+		out = append(out, attribute{
+			Key:   attr.GetKey(),
+			Value: attr.GetValue().GetStringValue(),
+		})
+	}
+	return out
 }
 
 func NewAgent(
@@ -101,7 +130,7 @@ func (agent *Agent) UpdateStatus(
 	agent.processStatusUpdate(statusMsg, response)
 
 	if statusMsg.ConnectionSettingsRequest != nil {
-		//agent.processConnectionSettingsRequest(statusMsg.ConnectionSettingsRequest.Opamp, response)
+		// agent.processConnectionSettingsRequest(statusMsg.ConnectionSettingsRequest.Opamp, response)
 	}
 
 	statusUpdateWatchers := agent.statusUpdateWatchers
@@ -268,7 +297,7 @@ func (agent *Agent) processStatusUpdate(
 	// send the new remote config to the Agent.
 	if configChanged ||
 		(agent.Status.RemoteConfigStatus != nil &&
-			bytes.Compare(agent.Status.RemoteConfigStatus.LastRemoteConfigHash, agent.remoteConfig.ConfigHash) != 0) {
+			!bytes.Equal(agent.Status.RemoteConfigStatus.LastRemoteConfigHash, agent.remoteConfig.ConfigHash)) {
 		// The new status resulted in a change in the config of the Agent or the Agent
 		// does not have this config (hash is different). Send the new config the Agent.
 		response.RemoteConfig = agent.remoteConfig
@@ -289,6 +318,13 @@ func (agent *Agent) SetCustomConfig(
 	notifyWhenConfigIsApplied chan<- struct{},
 ) {
 	agent.mux.Lock()
+
+	if agent.CustomInstanceConfig == nil {
+		agent.CustomInstanceConfig = map[string]string{}
+	}
+	if agent.EffectiveConfig == nil {
+		agent.EffectiveConfig = map[string]string{}
+	}
 
 	for key, file := range config.GetConfigMap() {
 		agent.CustomInstanceConfig[key] = string(file.Body)
@@ -399,7 +435,7 @@ func isEqualConfigFile(f1, f2 *protobufs.AgentConfigFile) bool {
 	if f1 == nil || f2 == nil {
 		return false
 	}
-	return bytes.Compare(f1.Body, f2.Body) == 0 && f1.ContentType == f2.ContentType
+	return bytes.Equal(f1.Body, f2.Body) && f1.ContentType == f2.ContentType
 }
 
 func (agent *Agent) calcConnectionSettings(response *protobufs.ServerToAgent) {

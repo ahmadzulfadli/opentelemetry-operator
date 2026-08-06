@@ -20,6 +20,7 @@ We gratefully welcome improvements to documentation as well as to code.
 * `make lint` - Run golangci-lint
 * `make fmt` - Format Go code and auto-fix issues
 * `make vet` - Run go vet
+* `make tidy` - Run `go mod tidy` in every Go module in the repository
 * `make update` - Generate code and manifests based on Go struct definitions for CRDs (includes generate, manifests, bundle, api-docs)
 * `make precommit` - Run all checks: fmt, vet, lint, test, ensure-update-is-noop (run before committing)
 
@@ -54,6 +55,25 @@ git checkout -b your-feature-branch
 git commit -sam "Add feature X"
 gh pr create
 ```
+
+#### Signing commits
+
+This repository enforces branch protection rules that require all commits to be signed. This protects against supply chain attacks by ensuring that the code pushed to the repository was authored by a verified contributor.
+
+To set up commit signing, you can use either SSH or GPG keys:
+
+**Using SSH (Recommended):**
+1. Ensure you have an SSH key added to your GitHub account.
+2. Tell Git to use SSH for signing: `git config --global gpg.format ssh`
+3. Set your signing key: `git config --global user.signingkey /path/to/your/ssh/key.pub`
+4. Enable automatic signing: `git config --global commit.gpgsign true`
+
+**Using GPG:**
+1. Generate a GPG key and add it to your GitHub account.
+2. Tell Git to use your GPG key: `git config --global user.signingkey <your-gpg-key-id>`
+3. Enable automatic signing: `git config --global commit.gpgsign true`
+
+For detailed instructions, refer to GitHub's official documentation on [commit signature verification](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification).
 
 #### Make changes to the project manifests
 
@@ -129,14 +149,7 @@ kubectl create secret docker-registry regcred --docker-server=<registry> --docke
 
 ### Unit tests
 
-Some unit tests use [envtest](https://book.kubebuilder.io/reference/envtest.html) which requires Kubernetes binaries (e.g. `api-server`, `etcd` and `kubectl`) to be present on the host filesystem. Makefile takes care of installing all dependent binaries, however running the tests from IDE or via `go test` might not work out-of-the-box. The `envtest` uses env variable `KUBEBUILDER_ASSETS` that points to a directory with these binaries. To make the test work in IDE or `go test` the environment variable has to be correctly set.
-
-Example how to run test that use `envtest`:
-
-```bash
-make envtest
-KUBEBUILDER_ASSETS=$(./bin/setup-envtest use -p path 1.35) go test ./pkg...
-```
+Some unit tests use [envtest](https://book.kubebuilder.io/reference/envtest.html) which requires Kubernetes binaries (e.g. `api-server`, `etcd` and `kubectl`) to be present on the host filesystem. The tests download these binaries automatically on first run, so no additional setup is required to run them via `make test`, `go test`, or from an IDE.
 
 ### End to end tests
 
@@ -226,6 +239,7 @@ type MySpec struct {
 3. Run `make update` - generates manifests, bundles, docs
 4. Run `make precommit` - ensures everything is valid
 5. Verify CRD changes: `git diff config/crd/bases/`
+6. Add your field to one of the [smoke tests](tests/e2e/smoke-collector/)
 
 **CRITICAL:** Always run `make update` after API changes. CI will fail with "ensure-update-is-noop" if you forget.
 
@@ -324,6 +338,7 @@ operator-sdk run bundle docker.io/${DOCKER_USER}/opentelemetry-operator-bundle:l
 The operator can be uninstalled by deleting `subscriptions.operators.coreos.com` and `clusterserviceversion.operators.coreos.com` objects from the current namespace.
 
 ```bash
+kubectl delete catalogsources.operators.coreos.com --all
 kubectl delete clusterserviceversion.operators.coreos.com --all
 kubectl delete subscriptions.operators.coreos.com --all
 ```

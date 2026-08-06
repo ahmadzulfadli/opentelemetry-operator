@@ -1,7 +1,11 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package data
 
 import (
 	"log"
+	"maps"
 	"sync"
 
 	"github.com/open-telemetry/opamp-go/protobufs"
@@ -44,6 +48,16 @@ func (a *Agents) SetCustomConfigForAgent(
 	agent := a.FindAgent(agentId)
 	if agent != nil {
 		agent.SetCustomConfig(config, notifyNextStatusUpdate)
+	}
+}
+
+// SendCommandToAgent sends a ServerToAgentCommand to the specified agent.
+func (a *Agents) SendCommandToAgent(agentId InstanceId, commandType protobufs.CommandType) {
+	agent := a.FindAgent(agentId)
+	if agent != nil {
+		agent.SendToAgent(&protobufs.ServerToAgent{
+			Command: &protobufs.ServerToAgentCommand{Type: commandType},
+		})
 	}
 }
 
@@ -112,9 +126,7 @@ func (a *Agents) GetAllAgentsReadonlyClone() map[InstanceId]*Agent {
 
 	// Clone the map first
 	m := map[InstanceId]*Agent{}
-	for id, agent := range a.agentsById {
-		m[id] = agent
-	}
+	maps.Copy(m, a.agentsById)
 	a.mux.RUnlock()
 
 	// Clone agents in the map

@@ -14,28 +14,16 @@ import (
 
 type AllocatorProvider func(log logr.Logger, opts ...Option) Allocator
 
-var (
-	strategies = map[string]Strategy{
-		leastWeightedStrategyName:     newleastWeightedStrategy(),
-		consistentHashingStrategyName: newConsistentHashingStrategy(),
-		perNodeStrategyName:           newPerNodeStrategy(),
-	}
-)
+var strategies = map[string]Strategy{
+	leastWeightedStrategyName:     newleastWeightedStrategy(),
+	consistentHashingStrategyName: newConsistentHashingStrategy(),
+	perNodeStrategyName:           newPerNodeStrategy(),
+}
 
 type Option func(Allocator)
 
-type Filter interface {
-	Apply([]*target.Item) []*target.Item
-}
-
-func WithFilter(filter Filter) Option {
-	return func(allocator Allocator) {
-		allocator.SetFilter(filter)
-	}
-}
-
 func WithFallbackStrategy(fallbackStrategy string) Option {
-	var strategy, ok = strategies[fallbackStrategy]
+	strategy, ok := strategies[fallbackStrategy]
 	if fallbackStrategy != "" && !ok {
 		panic(fmt.Errorf("unregistered strategy used as fallback: %s", fallbackStrategy))
 	}
@@ -64,8 +52,7 @@ type Allocator interface {
 	SetTargets(targets []*target.Item)
 	TargetItems() map[target.ItemHash]*target.Item
 	Collectors() map[string]*Collector
-	GetTargetsForCollectorAndJob(collector string, job string) []*target.Item
-	SetFilter(filter Filter)
+	GetTargetsForCollectorAndJob(collector, job string) []*target.Item
 	SetFallbackStrategy(strategy Strategy)
 }
 
@@ -86,9 +73,10 @@ var _ consistent.Member = Collector{}
 // This struct will be parsed into endpoint with Collector and jobs info.
 // This struct can be extended with information like annotations and labels in the future.
 type Collector struct {
-	Name       string
-	NodeName   string
-	NumTargets int
+	Name          string
+	NodeName      string
+	NumTargets    int
+	TargetsPerJob map[string]int
 }
 
 func (c Collector) Hash() string {
@@ -100,5 +88,5 @@ func (c Collector) String() string {
 }
 
 func NewCollector(name, node string) *Collector {
-	return &Collector{Name: name, NodeName: node}
+	return &Collector{Name: name, NodeName: node, TargetsPerJob: make(map[string]int)}
 }

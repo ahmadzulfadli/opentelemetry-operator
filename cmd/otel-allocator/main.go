@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"os"
 	"os/signal"
@@ -16,35 +17,30 @@ import (
 	"github.com/prometheus/prometheus/discovery"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/metric"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 
 	"github.com/open-telemetry/opentelemetry-operator/cmd/otel-allocator/internal/allocation"
 	"github.com/open-telemetry/opentelemetry-operator/cmd/otel-allocator/internal/collector"
 	"github.com/open-telemetry/opentelemetry-operator/cmd/otel-allocator/internal/config"
-	"github.com/open-telemetry/opentelemetry-operator/cmd/otel-allocator/internal/prehook"
 	"github.com/open-telemetry/opentelemetry-operator/cmd/otel-allocator/internal/server"
 	"github.com/open-telemetry/opentelemetry-operator/cmd/otel-allocator/internal/target"
+	"github.com/open-telemetry/opentelemetry-operator/cmd/otel-allocator/internal/telemetry"
 	allocatorWatcher "github.com/open-telemetry/opentelemetry-operator/cmd/otel-allocator/internal/watcher"
 )
 
-var (
-	setupLog = ctrl.Log.WithName("setup")
-)
+var setupLog = ctrl.Log.WithName("setup")
 
 func main() {
 	var (
-		// allocatorPrehook will be nil if filterStrategy is not set or
-		// unrecognized. No filtering will be used in this case.
-		allocatorPrehook prehook.Hook
 		allocator        allocation.Allocator
 		discoveryManager *discovery.Manager
 		collectorWatcher *collector.Watcher
 		targetDiscoverer *target.Discoverer
+		certWatcher      *certwatcher.CertWatcher
 
 		discoveryCancel context.CancelFunc
 		runGroup        run.Group
@@ -80,15 +76,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	metricExporter, promErr := otelprom.New()
-	if promErr != nil {
-		panic(promErr)
+	metricsGatherer, shutdownMeterProvider, mpErr := telemetry.SetupMeterProvider(ctx, cfg)
+	if mpErr != nil {
+		setupLog.Error(mpErr, "Unable to set up metrics")
+		os.Exit(1)
 	}
-	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(metricExporter))
-	otel.SetMeterProvider(meterProvider)
+	defer func() {
+		// Flush and close exporters (notably the OTLP reader) on shutdown so the final
+		// batch of metrics is delivered.
+		if shutdownErr := shutdownMeterProvider(context.Background()); shutdownErr != nil {
+			setupLog.Error(shutdownErr, "Error shutting down meter provider")
+		}
+	}()
 
-	allocatorPrehook = prehook.New(cfg.FilterStrategy, log)
-	allocator, allocErr := allocation.New(cfg.AllocationStrategy, log, allocation.WithFilter(allocatorPrehook), allocation.WithFallbackStrategy(cfg.AllocationFallbackStrategy))
+	allocator, allocErr := allocation.New(cfg.AllocationStrategy, log, allocation.WithFallbackStrategy(cfg.AllocationFallbackStrategy))
 	if allocErr != nil {
 		setupLog.Error(allocErr, "Unable to initialize allocation strategy")
 		os.Exit(1)
@@ -96,19 +97,29 @@ func main() {
 
 	httpOptions := []server.Option{}
 	if cfg.HTTPS.Enabled {
-		tlsConfig, confErr := cfg.HTTPS.NewTLSConfig()
+		var tlsConfig *tls.Config
+		var confErr error
+		tlsConfig, certWatcher, confErr = cfg.HTTPS.NewTLSConfig(log)
 		if confErr != nil {
 			setupLog.Error(confErr, "Unable to initialize TLS configuration")
 			os.Exit(1)
 		}
 		httpOptions = append(httpOptions, server.WithTLSConfig(tlsConfig, cfg.HTTPS.ListenAddr))
 	}
+	if cfg.AllowInsecureAuthSecrets {
+		httpOptions = append(httpOptions, server.WithInsecureAuthSecrets())
+	}
+	// Serve /metrics from the union of the default registry (Prometheus service discovery,
+	// Go runtime and process collectors) and the dedicated SDK registry (OTel SDK metrics),
+	// as assembled by setupMeterProvider.
+	httpOptions = append(httpOptions, server.WithMetricsGatherer(metricsGatherer))
 	srv, serverErr := server.NewServer(log, allocator, cfg.ListenAddr, httpOptions...)
 	if serverErr != nil {
 		panic(serverErr)
 	}
 
 	discoveryCtx, discoveryCancel := context.WithCancel(ctx)
+	defer discoveryCancel()
 	sdMetrics, discErr := discovery.CreateAndRegisterSDMetrics(prometheus.DefaultRegisterer)
 	if discErr != nil {
 		setupLog.Error(discErr, "Unable to register metrics for Prometheus service discovery")
@@ -116,7 +127,7 @@ func main() {
 	}
 	discoveryManager = discovery.NewManager(discoveryCtx, config.NopLogger, prometheus.DefaultRegisterer, sdMetrics)
 
-	targetDiscoverer, targetErr := target.NewDiscoverer(log, discoveryManager, allocatorPrehook, srv, allocator.SetTargets)
+	targetDiscoverer, targetErr := target.NewDiscoverer(log, discoveryManager, cfg.FilterStrategy, srv, allocator.SetTargets)
 	if targetErr != nil {
 		panic(targetErr)
 	}
@@ -225,6 +236,21 @@ func main() {
 				if shutdownErr := srv.ShutdownHTTPS(ctx); shutdownErr != nil {
 					setupLog.Error(shutdownErr, "Error on HTTPS server shutdown")
 				}
+			})
+
+		// Start certificate watchers for hot-reload
+		certWatcherCtx, certWatcherCancel := context.WithCancel(ctx)
+		defer certWatcherCancel()
+		// Server certificate watcher
+		runGroup.Add(
+			func() error {
+				watchErr := certWatcher.Start(certWatcherCtx)
+				setupLog.Info("Certificate watcher exited")
+				return watchErr
+			},
+			func(_ error) {
+				setupLog.Info("Closing certificate watcher")
+				certWatcherCancel()
 			})
 	}
 	meter := otel.GetMeterProvider().Meter("targetallocator")

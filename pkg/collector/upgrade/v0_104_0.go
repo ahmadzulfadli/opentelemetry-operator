@@ -24,7 +24,7 @@ func upgrade0_104_0(u VersionUpgrade, otelcol *v1beta1.OpenTelemetryCollector) (
 			"The new default is localhost. Please revisit your \"%s\" configuration. See: %s",
 		otelcol.Name, issueID,
 	)
-	u.Recorder.Event(otelcol, "Warning", "Upgrade", warnStr)
+	u.Recorder.Eventf(otelcol, nil, "Warning", "Upgrade", "Upgrade", warnStr)
 	return otelcol, nil
 }
 
@@ -52,7 +52,7 @@ func TAUnifyEnvVarExpansion(otelcol *v1beta1.OpenTelemetryCollector) {
 		otelcol.Spec.Args = make(map[string]string)
 	}
 	args, ok := otelcol.Spec.Args[baseFlag]
-	if !ok || len(args) == 0 {
+	if !ok || args == "" {
 		otelcol.Spec.Args[baseFlag] = "-" + fgFlag
 	} else if !strings.Contains(otelcol.Spec.Args[baseFlag], fgFlag) {
 		otelcol.Spec.Args[baseFlag] += ",-" + fgFlag
@@ -72,7 +72,7 @@ func ComponentUseLocalHostAsDefaultHost(otelcol *v1beta1.OpenTelemetryCollector)
 		otelcol.Spec.Args = make(map[string]string)
 	}
 	args, ok := otelcol.Spec.Args[baseFlag]
-	if !ok || len(args) == 0 {
+	if !ok || args == "" {
 		otelcol.Spec.Args[baseFlag] = "-" + fgFlag
 	} else if !strings.Contains(otelcol.Spec.Args[baseFlag], fgFlag) {
 		otelcol.Spec.Args[baseFlag] += ",-" + fgFlag

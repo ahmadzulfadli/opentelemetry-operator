@@ -15,7 +15,7 @@ import (
 )
 
 func upgrade0_24_0(u VersionUpgrade, otelcol *v1alpha1.OpenTelemetryCollector) (*v1alpha1.OpenTelemetryCollector, error) {
-	if len(otelcol.Spec.Config) == 0 {
+	if otelcol.Spec.Config == "" {
 		return otelcol, nil
 	}
 
@@ -24,7 +24,7 @@ func upgrade0_24_0(u VersionUpgrade, otelcol *v1alpha1.OpenTelemetryCollector) (
 		return otelcol, fmt.Errorf("couldn't upgrade to v0.24.0, failed to parse configuration: %w", err)
 	}
 
-	extensions, ok := cfg["extensions"].(map[interface{}]interface{})
+	extensions, ok := cfg["extensions"].(map[any]any)
 	if !ok {
 		// We do not need an upgrade if there are no extensions.
 		return otelcol, nil
@@ -33,16 +33,16 @@ func upgrade0_24_0(u VersionUpgrade, otelcol *v1alpha1.OpenTelemetryCollector) (
 	for k, v := range extensions {
 		if strings.HasPrefix(k.(string), "health_check") {
 			switch extension := v.(type) {
-			case map[interface{}]interface{}:
+			case map[any]any:
 				if port, ok := extension["port"]; ok {
 					delete(extension, "port")
 					extension["endpoint"] = fmt.Sprintf("0.0.0.0:%d", port)
 					existing := &corev1.ConfigMap{}
 					updated := existing.DeepCopy()
-					u.Recorder.Event(updated, "Normal", "Upgrade", fmt.Sprintf("upgrade to v0.24.0 migrated the property 'port' to 'endpoint' for extension %q", k))
+					u.Recorder.Eventf(updated, nil, "Normal", "Upgrade", "Upgrade", "upgrade to v0.24.0 migrated the property 'port' to 'endpoint' for extension %q", k)
 				}
 			case string:
-				if len(extension) == 0 {
+				if extension == "" {
 					// This extension is using the default configuration.
 					continue
 				}

@@ -5,25 +5,24 @@ package targetallocator
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/go-logr/logr"
-	"github.com/operator-framework/operator-lib/proxy"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/open-telemetry/opentelemetry-operator/apis/v1alpha1"
-	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/certmanager"
 	"github.com/open-telemetry/opentelemetry-operator/internal/config"
+	"github.com/open-telemetry/opentelemetry-operator/internal/manifests/manifestutils"
 	"github.com/open-telemetry/opentelemetry-operator/internal/naming"
 	"github.com/open-telemetry/opentelemetry-operator/pkg/constants"
 	"github.com/open-telemetry/opentelemetry-operator/pkg/featuregate"
 )
 
 // Container builds a container for the given TargetAllocator.
-func Container(cfg config.Config, logger logr.Logger, instance v1alpha1.TargetAllocator) corev1.Container {
+func Container(cfg config.Config, _ logr.Logger, instance v1alpha1.TargetAllocator) corev1.Container {
 	image := instance.Spec.Image
-	if len(image) == 0 {
+	if image == "" {
 		image = cfg.TargetAllocatorImage
 	}
 
@@ -48,7 +47,7 @@ func Container(cfg config.Config, logger logr.Logger, instance v1alpha1.TargetAl
 	}}
 	volumeMounts = append(volumeMounts, instance.Spec.VolumeMounts...)
 
-	var envVars = instance.Spec.Env
+	envVars := slices.Clone(instance.Spec.Env)
 	if envVars == nil {
 		envVars = []corev1.EnvVar{}
 	}
@@ -101,25 +100,33 @@ func Container(cfg config.Config, logger logr.Logger, instance v1alpha1.TargetAl
 	for k, v := range argsMap {
 		args = append(args, fmt.Sprintf("--%s=%s", k, v))
 	}
-	sort.Strings(args)
-	readinessProbe := &corev1.Probe{
-		ProbeHandler: corev1.ProbeHandler{
-			HTTPGet: &corev1.HTTPGetAction{
-				Path: "/readyz",
-				Port: intstr.FromInt(8080),
+	slices.Sort(args)
+
+	readinessProbe := instance.Spec.ReadinessProbe
+	if readinessProbe == nil {
+		readinessProbe = &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: "/readyz",
+					Port: intstr.FromInt(8080),
+				},
 			},
-		},
-	}
-	livenessProbe := &corev1.Probe{
-		ProbeHandler: corev1.ProbeHandler{
-			HTTPGet: &corev1.HTTPGetAction{
-				Path: "/livez",
-				Port: intstr.FromInt(8080),
-			},
-		},
+		}
 	}
 
-	if cfg.CertManagerAvailability == certmanager.Available && featuregate.EnableTargetAllocatorMTLS.IsEnabled() {
+	livenessProbe := instance.Spec.LivenessProbe
+	if livenessProbe == nil {
+		livenessProbe = &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: "/livez",
+					Port: intstr.FromInt(8080),
+				},
+			},
+		}
+	}
+
+	if manifestutils.IsTAMTLSEnabled(&instance) {
 		ports = append(ports, corev1.ContainerPort{
 			Name:          "https",
 			ContainerPort: 8443,
@@ -131,7 +138,7 @@ func Container(cfg config.Config, logger logr.Logger, instance v1alpha1.TargetAl
 		})
 	}
 
-	envVars = append(envVars, proxy.ReadProxyVarsFromEnv()...)
+	envVars = append(envVars, cfg.ProxyEnvVars...)
 	return corev1.Container{
 		Name:            naming.TAContainer(),
 		Image:           image,

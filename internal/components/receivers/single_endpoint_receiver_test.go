@@ -23,7 +23,7 @@ func TestParseEndpoint(t *testing.T) {
 	parser := receivers.ReceiverFor("myreceiver")
 
 	// test
-	ports, err := parser.Ports(logger, "myreceiver", map[string]interface{}{
+	ports, err := parser.Ports(logger, "myreceiver", map[string]any{
 		"endpoint": "0.0.0.0:1234",
 	})
 
@@ -39,13 +39,30 @@ func TestFailedToParseEndpoint(t *testing.T) {
 	parser := receivers.ReceiverFor("myreceiver")
 
 	// test
-	ports, err := parser.Ports(logger, "myreceiver", map[string]interface{}{
+	ports, err := parser.Ports(logger, "myreceiver", map[string]any{
 		"endpoint": "0.0.0.0",
 	})
 
 	// verify
 	assert.NoError(t, err)
 	assert.Len(t, ports, 0)
+}
+
+func TestScraperParserAliases(t *testing.T) {
+	for _, tt := range []struct {
+		alias        string
+		canonicalTag string
+	}{
+		{"sshcheck", "__ssh_check"},
+		{"cloudfoundry", "__cloud_foundry"},
+		{"httpcheck", "__http_check"},
+		{"flinkmetrics", "__flink_metrics"},
+	} {
+		t.Run(tt.alias, func(t *testing.T) {
+			parser := receivers.ReceiverFor(tt.alias)
+			assert.Equal(t, tt.canonicalTag, parser.ParserName())
+		})
+	}
 }
 
 func TestDownstreamParsers(t *testing.T) {
@@ -64,13 +81,16 @@ func TestDownstreamParsers(t *testing.T) {
 		{"sapm", "sapm", "__sapm", 7276, false},
 		{"signalfx", "signalfx", "__signalfx", 9943, false},
 		{"wavefront", "wavefront", "__wavefront", 2003, false},
-		{"fluentforward", "fluentforward", "__fluentforward", 8006, false},
+		{"fluentforward", "fluentforward", "__fluent_forward", 8006, false},
+		{"fluent_forward", "fluent_forward", "__fluent_forward", 8006, false},
 		{"statsd", "statsd", "__statsd", 8125, false},
 		{"influxdb", "influxdb", "__influxdb", 8086, false},
 		{"splunk_hec", "splunk_hec", "__splunk_hec", 8088, false},
 		{"awsxray", "awsxray", "__awsxray", 2000, false},
-		{"tcplog", "tcplog", "__tcplog", 0, true},
-		{"udplog", "udplog", "__udplog", 0, true},
+		{"tcplog", "tcplog", "__tcp_log", 0, true},
+		{"tcp_log", "tcp_log", "__tcp_log", 0, true},
+		{"udplog", "udplog", "__udp_log", 0, true},
+		{"udp_log", "udp_log", "__udp_log", 0, true},
 	} {
 		t.Run(tt.receiverName, func(t *testing.T) {
 			t.Run("builds successfully", func(t *testing.T) {
@@ -96,7 +116,7 @@ func TestDownstreamParsers(t *testing.T) {
 				parser := receivers.ReceiverFor(tt.receiverName)
 
 				// test
-				ports, err := parser.Ports(logger, tt.receiverName, map[string]interface{}{})
+				ports, err := parser.Ports(logger, tt.receiverName, map[string]any{})
 
 				if tt.defaultPort == 0 {
 					assert.Len(t, ports, 0)
@@ -117,11 +137,11 @@ func TestDownstreamParsers(t *testing.T) {
 				var ports []corev1.ServicePort
 				var err error
 				if tt.listenAddrParser {
-					ports, err = parser.Ports(logger, tt.receiverName, map[string]interface{}{
+					ports, err = parser.Ports(logger, tt.receiverName, map[string]any{
 						"listen_address": "0.0.0.0:65535",
 					})
 				} else {
-					ports, err = parser.Ports(logger, tt.receiverName, map[string]interface{}{
+					ports, err = parser.Ports(logger, tt.receiverName, map[string]any{
 						"endpoint": "0.0.0.0:65535",
 					})
 				}
@@ -138,11 +158,11 @@ func TestDownstreamParsers(t *testing.T) {
 				parser := receivers.ReceiverFor(tt.receiverName)
 
 				// test
-				config, err := parser.GetDefaultConfig(logger, map[string]interface{}{})
+				config, err := parser.GetDefaultConfig(logger, map[string]any{})
 
 				// verify
 				assert.NoError(t, err)
-				configMap, ok := config.(map[string]interface{})
+				configMap, ok := config.(map[string]any)
 				assert.True(t, ok)
 				if tt.defaultPort == 0 {
 					assert.Empty(t, configMap, 0)

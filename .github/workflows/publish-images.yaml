@@ -9,6 +9,8 @@ on:
 
 env:
   PLATFORMS: linux/amd64,linux/arm64,linux/s390x,linux/ppc64le
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/opentelemetry-operator/opentelemetry-operator
+  DOCKERHUB_IMAGE: otel/opentelemetry-operator
 
 permissions:
   contents: read
@@ -21,18 +23,29 @@ jobs:
       id-token: write
     name: Publish container images
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image: ${{ steps.release-image.outputs.image }}
+    env:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
-
-      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: "~1.25.6"
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "~1.26.5"
+          cache: false
 
       - name: Unshallow
         run: git fetch --prune --unshallow
 
       - name: Describe the current state
-        run: git describe --tags
+        run: |
+          # make sure that tags are available, but don't fail the workflow if none exist.
+          git fetch --tags || true
+          git describe --tags || echo "no-tag-$(git rev-parse --short HEAD)"
 
       - name: Set env vars for the job
         run: |
@@ -47,7 +60,8 @@ jobs:
           grep -v '\#' versions.txt | grep autoinstrumentation-apache-httpd | awk -F= '{print "AUTO_INSTRUMENTATION_APACHE_HTTPD_VERSION="$2}' >> $GITHUB_ENV
           grep -v '\#' versions.txt | grep autoinstrumentation-nginx | awk -F= '{print "AUTO_INSTRUMENTATION_NGINX_VERSION="$2}' >> $GITHUB_ENV
           echo "VERSION_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_ENV
-          echo "VERSION=$(git describe --tags | sed 's/^v//')" >> $GITHUB_ENV
+          VERSION="$(git describe --tags 2>/dev/null || echo "no-tag-$(git rev-parse --short HEAD)")"
+          echo "VERSION=${VERSION#v}" >> $GITHUB_ENV
 
       - name: Build the binary for each supported architecture
         run: |
@@ -59,40 +73,36 @@ jobs:
 
       - name: Docker meta
         id: docker_meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: |
-            otel/opentelemetry-operator
-            ghcr.io/open-telemetry/opentelemetry-operator/opentelemetry-operator
+            ${{ env.GHCR_IMAGE }}
+            ${{ secrets.DOCKER_USERNAME != '' && env.DOCKERHUB_IMAGE || '' }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{raw}}
             type=ref,event=branch
 
+      - name: Resolve release image name
+        id: release-image
+        run: echo "image=${GHCR_IMAGE}" >> "$GITHUB_OUTPUT"
+
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
-
-      - name: Cache Docker layers
-        uses: actions/cache@8b402f58fbc84540c8b491a91e594a4576fec3d7 # v5.0.2
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Log into Docker.io
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
-        if: ${{ github.event_name == 'push' }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        if: ${{ github.event_name == 'push' && env.DOCKER_USERNAME != '' }}
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Login to GitHub Package Registry
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: ${{ github.event_name == 'push' }}
         with:
           registry: ghcr.io
@@ -100,7 +110,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Operator image
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: ./Dockerfile
@@ -108,5 +119,16 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.docker_meta.outputs.tags }}
           labels: ${{ steps.docker_meta.outputs.labels }}
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache
+          cache-from: type=gha,scope=publish-operator
+          cache-to: type=gha,mode=max,scope=publish-operator
+
+      - name: Sign release images
+        if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          UPLOAD: ${{ startsWith(github.ref, 'refs/tags/v') && 'true' || 'false' }}
+        run: |
+          make cosign-sign IMAGE="${GHCR_IMAGE}" DIGEST="${DIGEST}" UPLOAD="${UPLOAD}"
+          if [ -n "${DOCKER_USERNAME}" ]; then
+            make cosign-sign IMAGE="${DOCKERHUB_IMAGE}" DIGEST="${DIGEST}" UPLOAD="${UPLOAD}"
+          fi

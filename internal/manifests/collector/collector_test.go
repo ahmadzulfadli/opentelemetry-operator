@@ -5,7 +5,7 @@ package collector
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -132,11 +132,11 @@ type mockReviewer struct{}
 
 var _ irbac.SAReviewer = &mockReviewer{}
 
-func (m *mockReviewer) CheckPolicyRules(ctx context.Context, serviceAccount, serviceAccountNamespace string, rules ...*rbacv1.PolicyRule) ([]*v1.SubjectAccessReview, error) {
-	return nil, fmt.Errorf("error checking policy rules")
+func (*mockReviewer) CheckPolicyRules(context.Context, string, string, ...*rbacv1.PolicyRule) ([]*v1.SubjectAccessReview, error) {
+	return nil, errors.New("error checking policy rules")
 }
 
-func (m *mockReviewer) CanAccess(ctx context.Context, serviceAccount, serviceAccountNamespace string, res *v1.ResourceAttributes, nonResourceAttributes *v1.NonResourceAttributes) (*v1.SubjectAccessReview, error) {
+func (*mockReviewer) CanAccess(context.Context, string, string, *v1.ResourceAttributes, *v1.NonResourceAttributes) (*v1.SubjectAccessReview, error) {
 	return nil, nil
 }
 
@@ -181,7 +181,7 @@ func TestBuild(t *testing.T) {
 			wantErr:         false,
 		},
 		{
-			name: "sidecar mode skips deployment manifests",
+			name: "sidecar mode skips service and other pod-controlling manifests",
 			params: manifests.Params{
 				Log: logger,
 				OtelCol: v1beta1.OpenTelemetryCollector{
@@ -190,6 +190,27 @@ func TestBuild(t *testing.T) {
 					},
 				},
 				Config: config.New(),
+			},
+			expectedObjects: 2,
+			wantErr:         false,
+		},
+		{
+			name: "sidecar mode with metrics enabled builds pod monitor but no services",
+			params: manifests.Params{
+				Log: logger,
+				OtelCol: v1beta1.OpenTelemetryCollector{
+					Spec: v1beta1.OpenTelemetryCollectorSpec{
+						Mode: v1beta1.ModeSidecar,
+						Observability: v1beta1.ObservabilitySpec{
+							Metrics: v1beta1.MetricsConfigSpec{
+								EnableMetrics: true,
+							},
+						},
+					},
+				},
+				Config: config.Config{
+					PrometheusCRAvailability: prometheus.Available,
+				},
 			},
 			expectedObjects: 3,
 			wantErr:         false,
@@ -324,7 +345,6 @@ func TestBuild(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-
 			objects, err := Build(tt.params)
 			if tt.wantErr {
 				require.Error(t, err)

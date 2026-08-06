@@ -8,12 +8,9 @@ Steps to release a new version of the OpenTelemetry Operator:
       - Operator, target allocator and opamp-bridge should be `$VERSION`.
       - OpenTelemetry Collector should be the latest collector version. The `major.minor` should typically match, with the patch portion being possibly different.
       - The `autoinstrumentation-*` versions should match the latest supported versions in `autoinstrumentation/`.
-        > **:warning: Warning**
-        >
-        > DO NOT BUMP JAVA PAST `1.X.X` AND DO NOT BUMP .NET PAST `1.2.0`. Upgrades past these versions will introduce breaking HTTP semantic convention changes.
    1. Check if the compatible OpenShift versions are updated in the `Makefile`.
    1. Update the bundle by running `make bundle reset VERSION=$VERSION`.
-   1. Change the compatibility matrix in the [compatibility doc](./docs/compatibility.md). Remove the oldest entry.
+   1. Change the compatibility matrix in the [compatibility doc](./docs/getting-started/compatibility.md). Remove the oldest entry.
       - Use the OpenTelemetry Operator version to be released
       - Update the supported Kubernetes version. It's defined in [CI to run e2e tests](.github/workflows/e2e-reusable.yaml).
       - Update the supported Prometheus version. It's defined in [go.mod](go.mod).
@@ -48,10 +45,11 @@ The operator should be released within a week after the [OpenTelemetry collector
 
 | Version  | Release manager |
 |----------|-----------------|
-| v0.144.0 | @swiatekm       |
-| v0.145.0 | @iblancasa      |
-| v0.146.0 | @jaronoff97     |
-| v0.147.0 | @yuriolisa      |
-| v0.148.0 | @TylerHelmuth   |
-| v0.149.0 | @frzifus        |
-| v0.150.0 | @pavolloffay    |
+| v0.157.0 | @frzifus        |
+| v0.158.0 | @pavolloffay    |
+| v0.159.0 | @swiatekm       |
+| v0.160.0 | @iblancasa      |
+| v0.161.0 | @atoulme        |
+| v0.162.0 | @jaronoff97     |
+| v0.163.0 | @yuriolisa      |
+| v0.164.0 | @TylerHelmuth   |

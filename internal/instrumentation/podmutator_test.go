@@ -4,7 +4,7 @@
 package instrumentation
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -13,15 +13,14 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 
 	"github.com/open-telemetry/opentelemetry-operator/apis/v1alpha1"
 	"github.com/open-telemetry/opentelemetry-operator/internal/config"
 )
 
 func TestMutatePod(t *testing.T) {
-
-	true := true
+	truee := true
 	zero := int64(0)
 
 	tests := []struct {
@@ -139,14 +138,6 @@ func TestMutatePod(t *testing.T) {
 				Spec: corev1.PodSpec{
 					Volumes: []corev1.Volume{
 						{
-							Name: javaVolumeName,
-							VolumeSource: corev1.VolumeSource{
-								EmptyDir: &corev1.EmptyDirVolumeSource{
-									SizeLimit: &defaultVolumeLimitSize,
-								},
-							},
-						},
-						{
 							Name: "otel-auto-secret-my-certs",
 							VolumeSource: corev1.VolumeSource{
 								Secret: &corev1.SecretVolumeSource{
@@ -161,6 +152,14 @@ func TestMutatePod(t *testing.T) {
 									LocalObjectReference: corev1.LocalObjectReference{
 										Name: "my-ca-bundle",
 									},
+								},
+							},
+						},
+						{
+							Name: javaVolumeName,
+							VolumeSource: corev1.VolumeSource{
+								EmptyDir: &corev1.EmptyDirVolumeSource{
+									SizeLimit: &defaultVolumeLimitSize,
 								},
 							},
 						},
@@ -280,12 +279,12 @@ func TestMutatePod(t *testing.T) {
 								},
 								{
 									Name:      "otel-auto-secret-my-certs",
-									ReadOnly:  true,
+									ReadOnly:  truee,
 									MountPath: "/otel-auto-instrumentation-secret-my-certs",
 								},
 								{
 									Name:      "otel-auto-configmap-my-ca-bundle",
-									ReadOnly:  true,
+									ReadOnly:  truee,
 									MountPath: "/otel-auto-instrumentation-configmap-my-ca-bundle",
 								},
 							},
@@ -680,6 +679,7 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
+				EnableInstrumentationCRDs:     true,
 				EnableJavaAutoInstrumentation: false,
 			},
 		},
@@ -866,7 +866,8 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
-				EnableNodeJSAutoInstrumentation: true,
+				EnableInstrumentationCRDs:       true,
+				EnableNodeJSAutoInstrumentation: truee,
 			},
 		},
 		{
@@ -1140,7 +1141,8 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
-				EnableNodeJSAutoInstrumentation: true,
+				EnableInstrumentationCRDs:       true,
+				EnableNodeJSAutoInstrumentation: truee,
 			},
 		},
 		{
@@ -1428,7 +1430,8 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
-				EnablePythonAutoInstrumentation: true,
+				EnableInstrumentationCRDs:       true,
+				EnablePythonAutoInstrumentation: truee,
 			},
 		},
 		{
@@ -1734,7 +1737,8 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
-				EnablePythonAutoInstrumentation: true,
+				EnableInstrumentationCRDs:       true,
+				EnablePythonAutoInstrumentation: truee,
 			},
 		},
 		{
@@ -2028,7 +2032,8 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
-				EnableDotNetAutoInstrumentation: true,
+				EnableInstrumentationCRDs:       true,
+				EnableDotNetAutoInstrumentation: truee,
 			},
 		},
 		{
@@ -2226,7 +2231,8 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
-				EnableDotNetAutoInstrumentation: true,
+				EnableInstrumentationCRDs:       true,
+				EnableDotNetAutoInstrumentation: truee,
 			},
 		},
 		{
@@ -2536,7 +2542,8 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
-				EnableDotNetAutoInstrumentation: true,
+				EnableInstrumentationCRDs:       true,
+				EnableDotNetAutoInstrumentation: truee,
 			},
 		},
 		{
@@ -2617,6 +2624,7 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
+				EnableInstrumentationCRDs:       true,
 				EnableDotNetAutoInstrumentation: false,
 			},
 		},
@@ -2692,7 +2700,7 @@ func TestMutatePod(t *testing.T) {
 					},
 				},
 				Spec: corev1.PodSpec{
-					ShareProcessNamespace: &true,
+					ShareProcessNamespace: &truee,
 					Containers: []corev1.Container{
 						{
 							Name: "app",
@@ -2702,7 +2710,7 @@ func TestMutatePod(t *testing.T) {
 							Image: "otel/go:1",
 							SecurityContext: &corev1.SecurityContext{
 								RunAsUser:  &zero,
-								Privileged: &true,
+								Privileged: &truee,
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
@@ -2795,7 +2803,8 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
-				EnableGoAutoInstrumentation: true,
+				EnableInstrumentationCRDs:   true,
+				EnableGoAutoInstrumentation: truee,
 			},
 		},
 		{
@@ -2878,6 +2887,7 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
+				EnableInstrumentationCRDs:   true,
 				EnableGoAutoInstrumentation: false,
 			},
 		},
@@ -2946,8 +2956,7 @@ func TestMutatePod(t *testing.T) {
 						{
 							Name:    apacheAgentCloneContainerName,
 							Image:   "",
-							Command: []string{"/bin/sh", "-c"},
-							Args:    []string{"cp -r /usr/local/apache2/conf/* " + apacheAgentDirectory + apacheAgentConfigDirectory},
+							Command: []string{"cp", "-r", "/usr/local/apache2/conf/.", apacheAgentDirectory + apacheAgentConfigDirectory},
 							VolumeMounts: []corev1.VolumeMount{{
 								Name:      apacheAgentConfigVolume,
 								MountPath: apacheAgentDirectory + apacheAgentConfigDirectory,
@@ -2957,8 +2966,7 @@ func TestMutatePod(t *testing.T) {
 							Name:    apacheAgentInitContainerName,
 							Image:   "otel/apache-httpd:1",
 							Command: []string{"/bin/sh", "-c"},
-							Args: []string{
-								"cp -r /opt/opentelemetry/* /opt/opentelemetry-webserver/agent && export agentLogDir=$(echo \"/opt/opentelemetry-webserver/agent/logs\" | sed 's,/,\\\\/,g') && cat /opt/opentelemetry-webserver/agent/conf/opentelemetry_sdk_log4cxx.xml.template | sed 's/__agent_log_dir__/'${agentLogDir}'/g'  > /opt/opentelemetry-webserver/agent/conf/opentelemetry_sdk_log4cxx.xml &&echo \"$OTEL_APACHE_AGENT_CONF\" > /opt/opentelemetry-webserver/source-conf/opentemetry_agent.conf && sed -i 's/<<SID-PLACEHOLDER>>/'${APACHE_SERVICE_INSTANCE_ID}'/g' /opt/opentelemetry-webserver/source-conf/opentemetry_agent.conf && echo -e '\nInclude /usr/local/apache2/conf/opentemetry_agent.conf' >> /opt/opentelemetry-webserver/source-conf/httpd.conf"},
+							Args:    []string{apacheHttpdAgentScript, "--", "/usr/local/apache2/conf"},
 							Env: []corev1.EnvVar{
 								{
 									Name:  apacheAttributesEnvVar,
@@ -3049,7 +3057,8 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
-				EnableApacheHttpdInstrumentation: true,
+				EnableInstrumentationCRDs:        true,
+				EnableApacheHttpdInstrumentation: truee,
 			},
 		},
 		{
@@ -3126,6 +3135,7 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
+				EnableInstrumentationCRDs:        true,
 				EnableApacheHttpdInstrumentation: false,
 			},
 		},
@@ -3198,7 +3208,7 @@ func TestMutatePod(t *testing.T) {
 							Name:    nginxAgentCloneContainerName,
 							Image:   "",
 							Command: []string{"/bin/sh", "-c"},
-							Args:    []string{"cp -r /etc/nginx/* /opt/opentelemetry-webserver/source-conf && export NGINX_VERSION=\"$( { nginx -v ; } 2>&1 )\" && echo ${NGINX_VERSION##*/} > /opt/opentelemetry-webserver/source-conf/version.txt"},
+							Args:    []string{nginxCloneScript, "--", "/etc/nginx"},
 							VolumeMounts: []corev1.VolumeMount{{
 								Name:      nginxAgentConfigVolume,
 								MountPath: nginxAgentConfDirFull,
@@ -3208,16 +3218,13 @@ func TestMutatePod(t *testing.T) {
 							Name:    nginxAgentInitContainerName,
 							Image:   "otel/nginx-inj:1",
 							Command: []string{"/bin/sh", "-c"},
-							Args:    []string{nginxSdkInitContainerTestCommand},
+							Args:    nginxSdkInitContainerTestArgs,
 							Env: []corev1.EnvVar{
 								{
 									Name:  nginxAttributesEnvVar,
 									Value: "NginxModuleEnabled ON;\nNginxModuleOtelExporterEndpoint http://otlp-endpoint:4317;\nNginxModuleOtelMaxQueueSize 4096;\nNginxModuleOtelSpanExporter otlp;\nNginxModuleResolveBackends ON;\nNginxModuleServiceInstanceId <<SID-PLACEHOLDER>>;\nNginxModuleServiceName my-nginx-6c44bcbdd;\nNginxModuleServiceNamespace req-namespace;\nNginxModuleTraceAsError ON;\n",
 								},
 								{
-									Name:  "OTEL_NGINX_I13N_SCRIPT",
-									Value: nginxSdkInitContainerI13nScript,
-								}, {
 									Name: nginxServiceInstanceIdEnvVar,
 									ValueFrom: &corev1.EnvVarSource{
 										FieldRef: &corev1.ObjectFieldSelector{
@@ -3306,7 +3313,8 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
-				EnableNginxAutoInstrumentation: true,
+				EnableInstrumentationCRDs:      true,
+				EnableNginxAutoInstrumentation: truee,
 			},
 		},
 		{
@@ -3389,9 +3397,10 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
-				EnableMultiInstrumentation:      true,
-				EnableNodeJSAutoInstrumentation: true,
-				EnablePythonAutoInstrumentation: true,
+				EnableInstrumentationCRDs:       true,
+				EnableMultiInstrumentation:      truee,
+				EnableNodeJSAutoInstrumentation: truee,
+				EnablePythonAutoInstrumentation: truee,
 				EnableDotNetAutoInstrumentation: false,
 			},
 		},
@@ -3522,6 +3531,9 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			err: `instrumentations.opentelemetry.io "doesnotexists" not found`,
+			config: config.Config{
+				EnableInstrumentationCRDs: true,
+			},
 		},
 		{
 			name: "multi instrumentation for multiple containers feature gate enabled",
@@ -4294,11 +4306,12 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
-				EnableMultiInstrumentation:      true,
-				EnableJavaAutoInstrumentation:   true,
-				EnableNodeJSAutoInstrumentation: true,
-				EnablePythonAutoInstrumentation: true,
-				EnableDotNetAutoInstrumentation: true,
+				EnableInstrumentationCRDs:       true,
+				EnableMultiInstrumentation:      truee,
+				EnableJavaAutoInstrumentation:   truee,
+				EnableNodeJSAutoInstrumentation: truee,
+				EnablePythonAutoInstrumentation: truee,
+				EnableDotNetAutoInstrumentation: truee,
 			},
 		},
 		{
@@ -4454,6 +4467,7 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
+				EnableInstrumentationCRDs:       true,
 				EnableMultiInstrumentation:      false,
 				EnableJavaAutoInstrumentation:   false,
 				EnableNodeJSAutoInstrumentation: false,
@@ -4604,7 +4618,8 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
-				EnableMultiInstrumentation:    true,
+				EnableInstrumentationCRDs:     true,
+				EnableMultiInstrumentation:    truee,
 				EnableJavaAutoInstrumentation: false,
 			},
 		},
@@ -4802,8 +4817,9 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
-				EnableMultiInstrumentation:      true,
-				EnableDotNetAutoInstrumentation: true,
+				EnableInstrumentationCRDs:       true,
+				EnableMultiInstrumentation:      truee,
+				EnableDotNetAutoInstrumentation: truee,
 			},
 		},
 		{
@@ -4905,7 +4921,8 @@ func TestMutatePod(t *testing.T) {
 				},
 			},
 			config: config.Config{
-				EnableMultiInstrumentation:      true,
+				EnableInstrumentationCRDs:       true,
+				EnableMultiInstrumentation:      truee,
 				EnableDotNetAutoInstrumentation: false,
 				EnableNodeJSAutoInstrumentation: false,
 			},
@@ -4956,42 +4973,42 @@ func TestMutatePod(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
-			mutator := NewMutator(logr.Discard(), k8sClient, record.NewFakeRecorder(100), test.config)
+			mutator := NewMutator(logr.Discard(), k8sClient, events.NewFakeRecorder(100), test.config)
 			require.NotNil(t, mutator)
 			if test.setFeatureGates != nil {
 				test.setFeatureGates(t)
 			}
 
-			err := k8sClient.Create(context.Background(), &test.ns)
+			err := k8sClient.Create(t.Context(), &test.ns)
 			require.NoError(t, err)
 			defer func() {
-				_ = k8sClient.Delete(context.Background(), &test.ns)
+				_ = k8sClient.Delete(t.Context(), &test.ns)
 			}()
 			if test.secret != nil {
-				err = k8sClient.Create(context.Background(), test.secret)
+				err = k8sClient.Create(t.Context(), test.secret)
 				require.NoError(t, err)
 				defer func() {
-					_ = k8sClient.Delete(context.Background(), test.secret)
+					_ = k8sClient.Delete(t.Context(), test.secret)
 				}()
 			}
 			if test.configMap != nil {
-				err = k8sClient.Create(context.Background(), test.configMap)
+				err = k8sClient.Create(t.Context(), test.configMap)
 				require.NoError(t, err)
 				defer func() {
-					_ = k8sClient.Delete(context.Background(), test.configMap)
+					_ = k8sClient.Delete(t.Context(), test.configMap)
 				}()
 			}
 
-			err = k8sClient.Create(context.Background(), &test.inst)
+			err = k8sClient.Create(t.Context(), &test.inst)
 			require.NoError(t, err)
 
-			pod, err := mutator.Mutate(context.Background(), test.ns, test.pod)
+			pod, err := mutator.Mutate(t.Context(), test.ns, test.pod)
 			if test.err == "" {
 				require.NoError(t, err)
 				assert.Equal(t, test.expected, pod)
 			} else {
+				require.Error(t, err)
 				assert.Contains(t, err.Error(), test.err)
 			}
 		})
@@ -5030,7 +5047,7 @@ func TestContainerNamesConfiguredForMultipleInstrumentations(t *testing.T) {
 				NodeJS: instrumentationWithContainers{Instrumentation: &v1alpha1.Instrumentation{}},
 			},
 			expectedStatus: false,
-			expectedMsg:    fmt.Errorf("incorrect instrumentation configuration - please provide container names for all instrumentations"),
+			expectedMsg:    errors.New("incorrect instrumentation configuration - please provide container names for all instrumentations"),
 		},
 		{
 			name: "Multiple instrumentations enabled with containers for single instrumentation",
@@ -5039,7 +5056,7 @@ func TestContainerNamesConfiguredForMultipleInstrumentations(t *testing.T) {
 				NodeJS: instrumentationWithContainers{Instrumentation: &v1alpha1.Instrumentation{}},
 			},
 			expectedStatus: false,
-			expectedMsg:    fmt.Errorf("incorrect instrumentation configuration - please provide container names for all instrumentations"),
+			expectedMsg:    errors.New("incorrect instrumentation configuration - please provide container names for all instrumentations"),
 		},
 		{
 			name: "Disabled instrumentations",
@@ -5047,7 +5064,7 @@ func TestContainerNamesConfiguredForMultipleInstrumentations(t *testing.T) {
 				NodeJS: instrumentationWithContainers{Instrumentation: nil},
 			},
 			expectedStatus: false,
-			expectedMsg:    fmt.Errorf("instrumentation configuration not provided"),
+			expectedMsg:    errors.New("instrumentation configuration not provided"),
 		},
 		{
 			name: "Multiple instrumentations enabled with duplicated containers",
@@ -5055,8 +5072,8 @@ func TestContainerNamesConfiguredForMultipleInstrumentations(t *testing.T) {
 				Java:   instrumentationWithContainers{Instrumentation: &v1alpha1.Instrumentation{}, Containers: []string{"app", "app1", "java"}},
 				NodeJS: instrumentationWithContainers{Instrumentation: &v1alpha1.Instrumentation{}, Containers: []string{"app1", "app", "nodejs"}},
 			},
-			expectedStatus: false,
-			expectedMsg:    fmt.Errorf("duplicated container names detected: [app app1]"),
+			expectedStatus: true,
+			expectedMsg:    nil,
 		},
 		{
 			name: "Multiple instrumentations enabled with duplicated containers for single instrumentation",
@@ -5065,7 +5082,7 @@ func TestContainerNamesConfiguredForMultipleInstrumentations(t *testing.T) {
 				NodeJS: instrumentationWithContainers{Instrumentation: &v1alpha1.Instrumentation{}, Containers: []string{"nodejs"}},
 			},
 			expectedStatus: false,
-			expectedMsg:    fmt.Errorf("duplicated container names detected: [app]"),
+			expectedMsg:    errors.New("duplicated container names detected: [app]"),
 		},
 	}
 
@@ -5127,4 +5144,314 @@ func TestInstrumentationLanguageContainersSet(t *testing.T) {
 			assert.Equal(t, test.expectedInstrumentations, test.instrumentations)
 		})
 	}
+}
+
+func TestGoContainerAnnotationsDuplicateDetection(t *testing.T) {
+	tests := []struct {
+		name               string
+		annotations        map[string]string
+		expectedContainers []string
+		expectedErr        string
+	}{
+		{
+			name: "go with common container-names only",
+			annotations: map[string]string{
+				annotationInjectGo:            "true",
+				annotationInjectContainerName: "initContainer",
+			},
+			expectedContainers: []string{"initContainer"},
+		},
+		{
+			name: "go with both common container names",
+			annotations: map[string]string{
+				annotationInjectGo:               "true",
+				annotationInjectContainerName:    "initContainer",
+				annotationInjectGoContainersName: "initContainer",
+			},
+			expectedContainers: []string{"initContainer", "initContainer"},
+			expectedErr:        "duplicated container names detected: [initContainer]",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			insts := languageInstrumentations{
+				Go: instrumentationWithContainers{Instrumentation: &v1alpha1.Instrumentation{}},
+			}
+
+			ns := corev1.Namespace{}
+			pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Annotations: test.annotations}}
+
+			err := insts.setCommonInstrumentedContainers(ns, pod)
+			require.NoError(t, err)
+
+			err = insts.setLanguageSpecificContainers(ns.ObjectMeta, pod.ObjectMeta)
+			require.NoError(t, err)
+
+			assert.Equal(t, test.expectedContainers, insts.Go.Containers)
+
+			ok, validateErr := insts.areInstrumentedContainersCorrect()
+			if test.expectedErr == "" {
+				assert.True(t, ok)
+				assert.NoError(t, validateErr)
+				return
+			}
+
+			assert.False(t, ok)
+			require.Error(t, validateErr)
+			assert.Equal(t, test.expectedErr, validateErr.Error())
+		})
+	}
+}
+
+func TestMultiLanguageCommonContainerNamesDuplicateDetection(t *testing.T) {
+	insts := languageInstrumentations{
+		Java: instrumentationWithContainers{Instrumentation: &v1alpha1.Instrumentation{}},
+		Go:   instrumentationWithContainers{Instrumentation: &v1alpha1.Instrumentation{}},
+	}
+
+	ns := corev1.Namespace{}
+	pod := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{
+				annotationInjectJava:          "true",
+				annotationInjectGo:            "true",
+				annotationInjectContainerName: "initContainer",
+			},
+		},
+	}
+
+	err := insts.setCommonInstrumentedContainers(ns, pod)
+	require.NoError(t, err)
+
+	err = insts.setLanguageSpecificContainers(ns.ObjectMeta, pod.ObjectMeta)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"initContainer"}, insts.Java.Containers)
+	assert.Equal(t, []string{"initContainer"}, insts.Go.Containers)
+
+	ok, validateErr := insts.areInstrumentedContainersCorrect()
+	assert.True(t, ok)
+	assert.NoError(t, validateErr)
+}
+
+// TestInitContainerInstrumentation tests that init containers can be instrumented
+// and receive all expected env vars through the full podmutator.Mutate flow.
+func TestInitContainerInstrumentation(t *testing.T) {
+	inst := &v1alpha1.Instrumentation{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "python-inst",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.InstrumentationSpec{
+			Python: v1alpha1.Python{
+				Image: "otel/python:1",
+				Env: []corev1.EnvVar{
+					{Name: "OTEL_LOG_LEVEL", Value: "debug"},
+				},
+			},
+			Exporter: v1alpha1.Exporter{
+				Endpoint: "http://collector:4318",
+			},
+		},
+	}
+
+	err := k8sClient.Create(t.Context(), inst)
+	require.NoError(t, err)
+	defer func() {
+		_ = k8sClient.Delete(t.Context(), inst)
+	}()
+
+	ns := corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "default",
+		},
+	}
+
+	// Pod with init container as instrumentation target
+	pod := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pod",
+			Namespace: "default",
+			Annotations: map[string]string{
+				annotationInjectPython:        "true",
+				annotationInjectContainerName: "python-init",
+			},
+		},
+		Spec: corev1.PodSpec{
+			InitContainers: []corev1.Container{
+				{Name: "python-init"},
+			},
+			Containers: []corev1.Container{
+				{Name: "main-app"},
+			},
+		},
+	}
+
+	mutator := NewMutator(logr.Discard(), k8sClient, nil, config.New())
+
+	result, err := mutator.Mutate(t.Context(), ns, pod)
+	require.NoError(t, err)
+
+	// Check that instrumentation init container was added BEFORE the target init container
+	require.Len(t, result.Spec.InitContainers, 2, "Should have 2 init containers")
+	assert.Equal(t, pythonInitContainerName, result.Spec.InitContainers[0].Name, "Instrumentation init container should be first")
+	assert.Equal(t, "python-init", result.Spec.InitContainers[1].Name, "Target init container should be second")
+
+	// Check env vars on the target init container
+	targetContainer := result.Spec.InitContainers[1]
+	t.Logf("Target init container env vars: %v", targetContainer.Env)
+
+	// Check for env vars from second loop (injectCommonEnvVar)
+	foundNodeIP := false
+	foundPodIP := false
+	// Check for env vars from first loop (injectPythonSDKToContainer)
+	foundLogLevel := false
+	foundPythonPath := false
+	// Check for env vars from injectCommonSDKConfig
+	foundServiceName := false
+
+	for _, env := range targetContainer.Env {
+		switch env.Name {
+		case "OTEL_NODE_IP":
+			foundNodeIP = true
+		case "OTEL_POD_IP":
+			foundPodIP = true
+		case "OTEL_LOG_LEVEL":
+			foundLogLevel = true
+		case "PYTHONPATH":
+			foundPythonPath = true
+		case "OTEL_SERVICE_NAME":
+			foundServiceName = true
+		}
+	}
+
+	assert.True(t, foundNodeIP, "Should have OTEL_NODE_IP env var (from injectCommonEnvVar)")
+	assert.True(t, foundPodIP, "Should have OTEL_POD_IP env var (from injectCommonEnvVar)")
+	assert.True(t, foundLogLevel, "Should have OTEL_LOG_LEVEL env var (from injectPythonSDKToContainer)")
+	assert.True(t, foundPythonPath, "Should have PYTHONPATH env var (from injectPythonSDKToContainer)")
+	assert.True(t, foundServiceName, "Should have OTEL_SERVICE_NAME env var (from injectCommonSDKConfig)")
+}
+
+func TestInitContainerInstrumentationCopiesSecurityContext(t *testing.T) {
+	inst := &v1alpha1.Instrumentation{
+		ObjectMeta: metav1.ObjectMeta{Name: "python-inst-sc", Namespace: "default"},
+		Spec: v1alpha1.InstrumentationSpec{
+			Python:   v1alpha1.Python{Image: "otel/python:1"},
+			Exporter: v1alpha1.Exporter{Endpoint: "http://collector:4318"},
+		},
+	}
+	err := k8sClient.Create(t.Context(), inst)
+	require.NoError(t, err)
+	defer func() { _ = k8sClient.Delete(t.Context(), inst) }()
+
+	ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}}
+	ape := false
+	rnr := true
+	targetSC := &corev1.SecurityContext{
+		AllowPrivilegeEscalation: &ape,
+		RunAsNonRoot:             &rnr,
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+	}
+
+	pod := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-pod-init-sc", Namespace: "default",
+			Annotations: map[string]string{
+				annotationInjectPython:        "true",
+				annotationInjectContainerName: "python-init",
+			},
+		},
+		Spec: corev1.PodSpec{
+			InitContainers: []corev1.Container{{Name: "python-init", SecurityContext: targetSC}},
+			Containers:     []corev1.Container{{Name: "main-app"}},
+		},
+	}
+
+	result, err := NewMutator(logr.Discard(), k8sClient, nil, config.New()).Mutate(t.Context(), ns, pod)
+	require.NoError(t, err)
+
+	injected := findContainerByName(pythonInitContainerName, &result)
+	require.NotNil(t, injected)
+	require.NotNil(t, injected.SecurityContext)
+	assert.Equal(t, targetSC.AllowPrivilegeEscalation, injected.SecurityContext.AllowPrivilegeEscalation)
+	assert.Equal(t, targetSC.Capabilities, injected.SecurityContext.Capabilities)
+	assert.Equal(t, targetSC.SeccompProfile, injected.SecurityContext.SeccompProfile)
+}
+
+func TestRegularContainerInstrumentationCopiesSecurityContext(t *testing.T) {
+	inst := &v1alpha1.Instrumentation{
+		ObjectMeta: metav1.ObjectMeta{Name: "python-inst-sc-regular", Namespace: "default"},
+		Spec: v1alpha1.InstrumentationSpec{
+			Python:   v1alpha1.Python{Image: "otel/python:1"},
+			Exporter: v1alpha1.Exporter{Endpoint: "http://collector:4318"},
+		},
+	}
+	err := k8sClient.Create(t.Context(), inst)
+	require.NoError(t, err)
+	defer func() { _ = k8sClient.Delete(t.Context(), inst) }()
+
+	ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}}
+	ape := false
+	targetSC := &corev1.SecurityContext{
+		AllowPrivilegeEscalation: &ape,
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+	}
+
+	pod := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-pod-regular-sc", Namespace: "default",
+			Annotations: map[string]string{annotationInjectPython: "true"},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "main-app", SecurityContext: targetSC}},
+		},
+	}
+
+	result, err := NewMutator(logr.Discard(), k8sClient, nil, config.New()).Mutate(t.Context(), ns, pod)
+	require.NoError(t, err)
+
+	injected := findContainerByName(pythonInitContainerName, &result)
+	require.NotNil(t, injected)
+	require.NotNil(t, injected.SecurityContext)
+	assert.Equal(t, targetSC.AllowPrivilegeEscalation, injected.SecurityContext.AllowPrivilegeEscalation)
+	assert.Equal(t, targetSC.Capabilities, injected.SecurityContext.Capabilities)
+	assert.Equal(t, targetSC.SeccompProfile, injected.SecurityContext.SeccompProfile)
+}
+
+func TestInitContainerInstrumentationNilSecurityContext(t *testing.T) {
+	inst := &v1alpha1.Instrumentation{
+		ObjectMeta: metav1.ObjectMeta{Name: "python-inst-sc-nil", Namespace: "default"},
+		Spec: v1alpha1.InstrumentationSpec{
+			Python:   v1alpha1.Python{Image: "otel/python:1"},
+			Exporter: v1alpha1.Exporter{Endpoint: "http://collector:4318"},
+		},
+	}
+	err := k8sClient.Create(t.Context(), inst)
+	require.NoError(t, err)
+	defer func() { _ = k8sClient.Delete(t.Context(), inst) }()
+
+	ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}}
+	pod := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-pod-init-nil-sc", Namespace: "default",
+			Annotations: map[string]string{
+				annotationInjectPython:        "true",
+				annotationInjectContainerName: "python-init",
+			},
+		},
+		Spec: corev1.PodSpec{
+			InitContainers: []corev1.Container{{Name: "python-init"}},
+			Containers:     []corev1.Container{{Name: "main-app"}},
+		},
+	}
+
+	result, err := NewMutator(logr.Discard(), k8sClient, nil, config.New()).Mutate(t.Context(), ns, pod)
+	require.NoError(t, err)
+
+	injected := findContainerByName(pythonInitContainerName, &result)
+	require.NotNil(t, injected)
+	assert.Nil(t, injected.SecurityContext)
 }

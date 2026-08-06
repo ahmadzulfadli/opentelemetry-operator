@@ -6,12 +6,7 @@ metadata:
 spec:
   config:
     receivers:
-      prometheus:
-        config:
-          scrape_configs: []
-
-    processors:
-
+      prometheus: {}
     exporters:
       prometheus:
         endpoint: 0.0.0.0:9090
@@ -27,6 +22,10 @@ spec:
     prometheusCR:
       enabled: true
       scrapeInterval: 1s
+      evaluationInterval: 2m
+      scrapeProtocols:
+        - PrometheusText1.0.0
+      serviceMonitorSelector: {}
       scrapeConfigSelector: {}
       probeSelector: {}
       scrapeClasses:
@@ -74,7 +73,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: check-metrics
-          image: docker.io/curlimages/curl:latest
+          image: mirror.gcr.io/alpine/curl:latest
           args:
             - /bin/sh
             - -c
@@ -93,7 +92,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: check-metrics
-          image: docker.io/curlimages/curl:latest
+          image: mirror.gcr.io/alpine/curl:latest
           args:
             - /bin/sh
             - -c
@@ -112,7 +111,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: check-metrics
-          image: docker.io/curlimages/curl:latest
+          image: mirror.gcr.io/alpine/curl:latest
           args:
             - /bin/sh
             - -c
@@ -131,7 +130,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: check-metrics
-          image: docker.io/curlimages/curl:latest
+          image: mirror.gcr.io/alpine/curl:latest
           args:
             - /bin/sh
             - -c
@@ -150,7 +149,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: check-metrics
-          image: docker.io/curlimages/curl:latest
+          image: mirror.gcr.io/alpine/curl:latest
           args:
             - /bin/sh
             - -c

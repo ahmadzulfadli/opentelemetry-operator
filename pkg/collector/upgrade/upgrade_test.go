@@ -11,12 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/open-telemetry/opentelemetry-operator/apis/v1alpha1"
 	"github.com/open-telemetry/opentelemetry-operator/apis/v1beta1"
 	"github.com/open-telemetry/opentelemetry-operator/internal/version"
+	"github.com/open-telemetry/opentelemetry-operator/internal/webhook"
 	"github.com/open-telemetry/opentelemetry-operator/pkg/collector/upgrade"
 )
 
@@ -121,7 +122,7 @@ func TestShouldUpgradeAllToLatestBasedOnUpgradeStrategy(t *testing.T) {
 				Log:      logger,
 				Version:  currentV,
 				Client:   k8sClient,
-				Recorder: record.NewFakeRecorder(upgrade.RecordBufferSize),
+				Recorder: events.NewFakeRecorder(upgrade.RecordBufferSize),
 			}
 
 			// test
@@ -162,13 +163,13 @@ func TestEnvVarUpdates(t *testing.T) {
 			},
 			Config: v1beta1.Config{
 				Receivers: v1beta1.AnyConfig{
-					Object: map[string]interface{}{
+					Object: map[string]any{
 						"prometheus": nil,
 					},
 				},
 				Exporters: v1beta1.AnyConfig{
-					Object: map[string]interface{}{
-						"debug": []interface{}{},
+					Object: map[string]any{
+						"debug": []any{},
 					},
 				},
 				Service: v1beta1.Service{
@@ -201,7 +202,7 @@ func TestEnvVarUpdates(t *testing.T) {
 		Log:      logger,
 		Version:  currentV,
 		Client:   k8sClient,
-		Recorder: record.NewFakeRecorder(upgrade.RecordBufferSize),
+		Recorder: events.NewFakeRecorder(upgrade.RecordBufferSize),
 	}
 
 	// test
@@ -239,7 +240,7 @@ func TestUpgradeUpToLatestKnownVersion(t *testing.T) {
 				Log:      logger,
 				Version:  currentV,
 				Client:   k8sClient,
-				Recorder: record.NewFakeRecorder(upgrade.RecordBufferSize),
+				Recorder: events.NewFakeRecorder(upgrade.RecordBufferSize),
 			}
 			// test
 			res, err := up.ManagedInstance(context.Background(), convertTov1beta1(t, existing))
@@ -278,7 +279,7 @@ func TestVersionsShouldNotBeChanged(t *testing.T) {
 				Log:      logger,
 				Version:  currentV,
 				Client:   k8sClient,
-				Recorder: record.NewFakeRecorder(upgrade.RecordBufferSize),
+				Recorder: events.NewFakeRecorder(upgrade.RecordBufferSize),
 			}
 
 			// test
@@ -330,14 +331,14 @@ func makeOtelcol(nsn types.NamespacedName, managementState v1alpha1.ManagementSt
 
 func convertTov1beta1(t *testing.T, collector v1alpha1.OpenTelemetryCollector) v1beta1.OpenTelemetryCollector {
 	betacollector := v1beta1.OpenTelemetryCollector{}
-	err := collector.ConvertTo(&betacollector)
+	err := webhook.OtelColConvertTo(&collector, &betacollector)
 	require.NoError(t, err)
 	return betacollector
 }
 
 func convertTov1alpha1(t *testing.T, collector v1beta1.OpenTelemetryCollector) v1alpha1.OpenTelemetryCollector {
 	alphacollector := v1alpha1.OpenTelemetryCollector{}
-	err := alphacollector.ConvertFrom(&collector)
+	err := webhook.OtelColConvertFrom(&alphacollector, &collector)
 	require.NoError(t, err)
 	return alphacollector
 }

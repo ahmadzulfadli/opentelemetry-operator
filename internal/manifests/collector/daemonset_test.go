@@ -49,10 +49,11 @@ func TestDaemonSetNewDefault(t *testing.T) {
 
 	// verify sha256 podAnnotation
 	expectedAnnotations := map[string]string{
-		"opentelemetry-operator-config/sha256": "fbcdae6a02b2115cd5ca4f34298202ab041d1dfe62edebfaadb48b1ee178231d",
-		"prometheus.io/path":                   "/metrics",
-		"prometheus.io/port":                   "8888",
-		"prometheus.io/scrape":                 "true",
+		"opentelemetry-operator-config/sha256":                   "fbcdae6a02b2115cd5ca4f34298202ab041d1dfe62edebfaadb48b1ee178231d",
+		"prometheus.io/path":                                     "/metrics",
+		"prometheus.io/port":                                     "8888",
+		"prometheus.io/scrape":                                   "true",
+		"operator.opentelemetry.io/prometheus-annotations-added": "true",
 	}
 	assert.Equal(t, expectedAnnotations, d.Spec.Template.Annotations)
 
@@ -118,6 +119,107 @@ func TestDaemonsetHostNetwork(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, d2.Spec.Template.Spec.HostNetwork)
 	assert.Equal(t, d2.Spec.Template.Spec.DNSPolicy, v1.DNSClusterFirstWithHostNet)
+}
+
+func TestDaemonsetHostUsers(t *testing.T) {
+	params1 := manifests.Params{
+		Config: config.New(),
+		OtelCol: v1beta1.OpenTelemetryCollector{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "my-instance",
+				Namespace: "my-namespace",
+			},
+			Spec: v1beta1.OpenTelemetryCollectorSpec{},
+		},
+		Log: testLogger,
+	}
+	// test default (unset)
+	d1, err := DaemonSet(params1)
+	require.NoError(t, err)
+	assert.Nil(t, d1.Spec.Template.Spec.HostUsers)
+
+	// verify hostUsers=true
+	hostUsersTrue := true
+	params2 := manifests.Params{
+		Config: config.New(),
+		OtelCol: v1beta1.OpenTelemetryCollector{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "my-instance",
+				Namespace: "my-namespace",
+			},
+			Spec: v1beta1.OpenTelemetryCollectorSpec{
+				OpenTelemetryCommonFields: v1beta1.OpenTelemetryCommonFields{
+					HostUsers: &hostUsersTrue,
+				},
+			},
+		},
+		Log: testLogger,
+	}
+	d2, err := DaemonSet(params2)
+	require.NoError(t, err)
+	require.NotNil(t, d2.Spec.Template.Spec.HostUsers)
+	assert.True(t, *d2.Spec.Template.Spec.HostUsers)
+
+	// verify hostUsers=false
+	hostUsersFalse := false
+	params3 := manifests.Params{
+		Config: config.New(),
+		OtelCol: v1beta1.OpenTelemetryCollector{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "my-instance",
+				Namespace: "my-namespace",
+			},
+			Spec: v1beta1.OpenTelemetryCollectorSpec{
+				OpenTelemetryCommonFields: v1beta1.OpenTelemetryCommonFields{
+					HostUsers: &hostUsersFalse,
+				},
+			},
+		},
+		Log: testLogger,
+	}
+	d3, err := DaemonSet(params3)
+	require.NoError(t, err)
+	require.NotNil(t, d3.Spec.Template.Spec.HostUsers)
+	assert.False(t, *d3.Spec.Template.Spec.HostUsers)
+}
+
+func TestDaemonsetHostAliases(t *testing.T) {
+	params1 := manifests.Params{
+		Config: config.New(),
+		OtelCol: v1beta1.OpenTelemetryCollector{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "my-instance",
+				Namespace: "my-namespace",
+			},
+			Spec: v1beta1.OpenTelemetryCollectorSpec{},
+		},
+		Log: testLogger,
+	}
+	// test default (unset)
+	d1, err := DaemonSet(params1)
+	require.NoError(t, err)
+	assert.Empty(t, d1.Spec.Template.Spec.HostAliases)
+
+	// verify hostAliases set
+	aliases := []v1.HostAlias{{IP: "1.2.3.4", Hostnames: []string{"host.local"}}}
+	params2 := manifests.Params{
+		Config: config.New(),
+		OtelCol: v1beta1.OpenTelemetryCollector{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "my-instance",
+				Namespace: "my-namespace",
+			},
+			Spec: v1beta1.OpenTelemetryCollectorSpec{
+				OpenTelemetryCommonFields: v1beta1.OpenTelemetryCommonFields{
+					HostAliases: aliases,
+				},
+			},
+		},
+		Log: testLogger,
+	}
+	d2, err := DaemonSet(params2)
+	require.NoError(t, err)
+	assert.Equal(t, aliases, d2.Spec.Template.Spec.HostAliases)
 }
 
 func TestDaemonsetDNSPolicy(t *testing.T) {
@@ -193,11 +295,12 @@ func TestDaemonsetPodAnnotations(t *testing.T) {
 		"prometheus.io/path":                   "/metrics",
 		"prometheus.io/port":                   "8888",
 		"prometheus.io/scrape":                 "true",
+		"operator.opentelemetry.io/prometheus-annotations-added": "true",
 	}
 
 	// verify
 	assert.Equal(t, "my-instance-collector", ds.Name)
-	assert.Len(t, ds.Spec.Template.Annotations, 5)
+	assert.Len(t, ds.Spec.Template.Annotations, 6)
 	assert.Equal(t, expectedAnnotations, ds.Spec.Template.Annotations)
 }
 
@@ -264,9 +367,9 @@ func TestDaemonsetFilterLabels(t *testing.T) {
 	d, err := DaemonSet(params)
 	require.NoError(t, err)
 
-	assert.Len(t, d.ObjectMeta.Labels, 6)
+	assert.Len(t, d.Labels, 6)
 	for k := range excludedLabels {
-		assert.NotContains(t, d.ObjectMeta.Labels, k)
+		assert.NotContains(t, d.Labels, k)
 	}
 }
 
@@ -297,9 +400,9 @@ func TestDaemonsetFilterAnnotations(t *testing.T) {
 	d, err := DaemonSet(params)
 	require.NoError(t, err)
 
-	assert.Len(t, d.ObjectMeta.Annotations, 0)
+	assert.Len(t, d.Annotations, 0)
 	for k := range excludedAnnotations {
-		assert.NotContains(t, d.ObjectMeta.Annotations, k)
+		assert.NotContains(t, d.Annotations, k)
 	}
 }
 
@@ -701,7 +804,6 @@ func TestDaemonSetTerminationGracePeriodSeconds(t *testing.T) {
 }
 
 func TestDaemonSetHostPIDCanBeSet(t *testing.T) {
-
 	// Test the case where hostPID is not set, should default to false
 	otelcol1 := v1beta1.OpenTelemetryCollector{
 		ObjectMeta: metav1.ObjectMeta{

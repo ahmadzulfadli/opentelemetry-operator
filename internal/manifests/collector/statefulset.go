@@ -33,6 +33,11 @@ func StatefulSet(params manifests.Params) (*appsv1.StatefulSet, error) {
 		serviceName = naming.HeadlessService(params.OtelCol.Name)
 	}
 
+	podManagementPolicy := params.OtelCol.Spec.PodManagementPolicy
+	if podManagementPolicy == "" {
+		podManagementPolicy = appsv1.ParallelPodManagement
+	}
+
 	return &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
@@ -53,12 +58,14 @@ func StatefulSet(params manifests.Params) (*appsv1.StatefulSet, error) {
 				Spec: corev1.PodSpec{
 					ServiceAccountName:            ServiceAccountName(params.OtelCol),
 					InitContainers:                params.OtelCol.Spec.InitContainers,
-					Containers:                    append([]corev1.Container{Container(params.Config, params.Log, params.OtelCol, true)}, params.OtelCol.Spec.AdditionalContainers...),
-					Volumes:                       Volumes(params.Config, params.OtelCol),
+					Containers:                    append([]corev1.Container{Container(params.Config, params.Log, params.OtelCol, true, params.TargetAllocator)}, params.OtelCol.Spec.AdditionalContainers...),
+					Volumes:                       Volumes(params.Config, params.OtelCol, params.TargetAllocator),
 					DNSPolicy:                     manifestutils.GetDNSPolicy(params.OtelCol.Spec.HostNetwork, params.OtelCol.Spec.PodDNSConfig, params.OtelCol.Spec.DNSPolicy),
 					DNSConfig:                     &params.OtelCol.Spec.PodDNSConfig,
 					HostNetwork:                   params.OtelCol.Spec.HostNetwork,
 					HostPID:                       params.OtelCol.Spec.HostPID,
+					HostUsers:                     params.OtelCol.Spec.HostUsers,
+					HostAliases:                   params.OtelCol.Spec.HostAliases,
 					ShareProcessNamespace:         &params.OtelCol.Spec.ShareProcessNamespace,
 					Tolerations:                   params.OtelCol.Spec.Tolerations,
 					NodeSelector:                  params.OtelCol.Spec.NodeSelector,
@@ -70,7 +77,7 @@ func StatefulSet(params manifests.Params) (*appsv1.StatefulSet, error) {
 				},
 			},
 			Replicas:                             manifestutils.GetDesiredReplicas(params.OtelCol),
-			PodManagementPolicy:                  "Parallel",
+			PodManagementPolicy:                  podManagementPolicy,
 			VolumeClaimTemplates:                 VolumeClaimTemplates(params.OtelCol),
 			PersistentVolumeClaimRetentionPolicy: params.OtelCol.Spec.PersistentVolumeClaimRetentionPolicy,
 		},

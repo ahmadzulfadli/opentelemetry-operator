@@ -18,13 +18,37 @@ type TargetAllocatorPrometheusCR struct {
 	// DenyNamespaces Namespaces to scope the interaction of the Target Allocator and the apiserver (deny list). This is mutually exclusive with AllowNamespaces.
 	// +optional
 	DenyNamespaces []string `json:"denyNamespaces,omitempty"`
+	// SecretNamespaces Namespaces to scope the watching of secrets for the Target Allocator.
+	// If not configured, defaults to the target allocator's own namespace.
+	// +optional
+	SecretNamespaces []string `json:"secretNamespaces,omitempty"`
+	// DenyFSAccessThroughSMs causes the Target Allocator to drop ServiceMonitor and
+	// PodMonitor endpoints that reference arbitrary files on the file system. When
+	// enabled, endpoints with bearerTokenFile, tlsConfig.caFile, tlsConfig.certFile,
+	// or tlsConfig.keyFile are dropped from the produced scrape configuration while
+	// the remaining endpoints are kept. This prevents tenants from stealing the
+	// Collector's service account token via ServiceMonitor bearerTokenFile
+	// references. This is the equivalent of ArbitraryFSAccessThroughSMs.Deny from
+	// the Prometheus Operator.
+	// +optional
+	DenyFSAccessThroughSMs bool `json:"denyFSAccessThroughSMs,omitempty"`
 	// Default interval between consecutive scrapes. Intervals set in ServiceMonitors and PodMonitors override it.
-	//Equivalent to the same setting on the Prometheus CR.
 	//
 	// Default: "30s"
 	// +kubebuilder:default:="30s"
 	// +kubebuilder:validation:Format:=duration
 	ScrapeInterval *metav1.Duration `json:"scrapeInterval,omitempty"`
+	// Default interval between rule evaluations.
+	//
+	// Default: "30s"
+	// +kubebuilder:default:="30s"
+	// +kubebuilder:validation:Format:=duration
+	// +optional
+	EvaluationInterval *metav1.Duration `json:"evaluationInterval,omitempty"`
+	// ScrapeProtocols define the protocols to negotiate during a scrape. It tells clients the
+	// protocols supported by Prometheus in order of preference (from most to least preferred).
+	// +optional
+	ScrapeProtocols []string `json:"scrapeProtocols,omitempty"`
 	// ScrapeClasses to be referenced by PodMonitors and ServiceMonitors to include common configuration.
 	// If specified, expects an array of ScrapeClass objects as specified by https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.ScrapeClass.
 	// +optional
@@ -37,24 +61,52 @@ type TargetAllocatorPrometheusCR struct {
 	// label selector matches no objects.
 	// +optional
 	PodMonitorSelector *metav1.LabelSelector `json:"podMonitorSelector,omitempty"`
+	// Namespaces to be selected for PodMonitor discovery.
+	// A label selector is a label query over a set of resources. The result of matchLabels and
+	// matchExpressions are ANDed. An empty label selector matches all objects. A null
+	// label selector matches no objects.
+	// +optional
+	// +kubebuilder:default:={}
+	PodMonitorNamespaceSelector *metav1.LabelSelector `json:"podMonitorNamespaceSelector,omitempty"`
 	// ServiceMonitors to be selected for target discovery.
 	// A label selector is a label query over a set of resources. The result of matchLabels and
 	// matchExpressions are ANDed. An empty label selector matches all objects. A null
 	// label selector matches no objects.
 	// +optional
 	ServiceMonitorSelector *metav1.LabelSelector `json:"serviceMonitorSelector,omitempty"`
+	// Namespaces to be selected for ServiceMonitor discovery.
+	// A label selector is a label query over a set of resources. The result of matchLabels and
+	// matchExpressions are ANDed. An empty label selector matches all objects. A null
+	// label selector matches no objects.
+	// +optional
+	// +kubebuilder:default:={}
+	ServiceMonitorNamespaceSelector *metav1.LabelSelector `json:"serviceMonitorNamespaceSelector,omitempty"`
 	// ScrapeConfigs to be selected for target discovery.
 	// A label selector is a label query over a set of resources. The result of matchLabels and
 	// matchExpressions are ANDed. An empty label selector matches all objects. A null
 	// label selector matches no objects.
 	// +optional
 	ScrapeConfigSelector *metav1.LabelSelector `json:"scrapeConfigSelector,omitempty"`
+	// Namespaces to be selected for ScrapeConfig discovery.
+	// A label selector is a label query over a set of resources. The result of matchLabels and
+	// matchExpressions are ANDed. An empty label selector matches all objects. A null
+	// label selector matches no objects.
+	// +optional
+	// +kubebuilder:default:={}
+	ScrapeConfigNamespaceSelector *metav1.LabelSelector `json:"scrapeConfigNamespaceSelector,omitempty"`
 	// Probes to be selected for target discovery.
 	// A label selector is a label query over a set of resources. The result of matchLabels and
 	// matchExpressions are ANDed. An empty label selector matches all objects. A null
 	// label selector matches no objects.
 	// +optional
 	ProbeSelector *metav1.LabelSelector `json:"probeSelector,omitempty"`
+	// Namespaces to be selected for Probe discovery.
+	// A label selector is a label query over a set of resources. The result of matchLabels and
+	// matchExpressions are ANDed. An empty label selector matches all objects. A null
+	// label selector matches no objects.
+	// +optional
+	// +kubebuilder:default:={}
+	ProbeNamespaceSelector *metav1.LabelSelector `json:"probeNamespaceSelector,omitempty"`
 }
 
 type (

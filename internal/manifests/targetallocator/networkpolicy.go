@@ -10,16 +10,13 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/open-telemetry/opentelemetry-operator/apis/v1alpha1"
-	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/certmanager"
 	"github.com/open-telemetry/opentelemetry-operator/internal/manifests/manifestutils"
 	"github.com/open-telemetry/opentelemetry-operator/internal/naming"
-	"github.com/open-telemetry/opentelemetry-operator/pkg/featuregate"
 )
 
 const (
-	defaultAPIServerPort = 6443
-	defaultHTTPPort      = 8080
-	defaultHTTPSPort     = 8443
+	defaultHTTPPort  = 8080
+	defaultHTTPSPort = 8443
 )
 
 func NetworkPolicy(params Params) (*networkingv1.NetworkPolicy, error) {
@@ -32,7 +29,18 @@ func NetworkPolicy(params Params) (*networkingv1.NetworkPolicy, error) {
 	annotations := Annotations(params.TargetAllocator, nil, params.Config.AnnotationsFilter)
 
 	tcp := corev1.ProtocolTCP
-	apiServerPort := intstr.FromInt32(defaultAPIServerPort)
+	apiServerPort := intstr.FromInt32(params.Config.Internal.KubeAPIServerPort)
+	var apiSeverIPs []networkingv1.NetworkPolicyPeer
+	// Add IPBlock rules for API server IPs
+	for _, ip := range params.Config.Internal.KubeAPIServerIPs {
+		cidr := ip + "/32"
+		apiSeverIPs = append(apiSeverIPs, networkingv1.NetworkPolicyPeer{
+			IPBlock: &networkingv1.IPBlock{
+				CIDR: cidr,
+			},
+		})
+	}
+
 	np := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
@@ -55,6 +63,7 @@ func NetworkPolicy(params Params) (*networkingv1.NetworkPolicy, error) {
 							Port:     &apiServerPort,
 						},
 					},
+					To: apiSeverIPs,
 				},
 			},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
@@ -95,7 +104,7 @@ func getContainerPorts(instance v1alpha1.TargetAllocator, params Params) []corev
 		})
 	}
 
-	if params.Config.CertManagerAvailability == certmanager.Available && featuregate.EnableTargetAllocatorMTLS.IsEnabled() {
+	if manifestutils.IsTAMTLSEnabled(&params.TargetAllocator) {
 		ports = append(ports, corev1.ContainerPort{
 			Name:          "https",
 			ContainerPort: defaultHTTPSPort,

@@ -24,7 +24,7 @@ func colIndex(index, numCols int) int {
 	return index % numCols
 }
 
-func MakeNNewTargets(n int, numCollectors int, startingIndex int) []*target.Item {
+func MakeNNewTargets(n, numCollectors, startingIndex int) []*target.Item {
 	toReturn := []*target.Item{}
 	for i := startingIndex; i < n+startingIndex; i++ {
 		collector := fmt.Sprintf("collector-%d", colIndex(i, numCollectors))
@@ -32,13 +32,14 @@ func MakeNNewTargets(n int, numCollectors int, startingIndex int) []*target.Item
 			labels.Label{Name: "i", Value: strconv.Itoa(i)},
 			labels.Label{Name: "total", Value: strconv.Itoa(n + startingIndex)},
 		)
-		newTarget := target.NewItem(fmt.Sprintf("test-job-%d", i), fmt.Sprintf("test-url-%d", i), label, collector)
+		jobName := fmt.Sprintf("test-job-%d", i)
+		newTarget := target.NewItem(jobName, fmt.Sprintf("test-url-%d", i), label, collector, target.HashLabels(label, jobName))
 		toReturn = append(toReturn, newTarget)
 	}
 	return toReturn
 }
 
-func MakeNCollectors(n int, startingIndex int) map[string]*Collector {
+func MakeNCollectors(n, startingIndex int) map[string]*Collector {
 	toReturn := map[string]*Collector{}
 	for i := startingIndex; i < n+startingIndex; i++ {
 		collector := fmt.Sprintf("collector-%d", i)
@@ -51,7 +52,7 @@ func MakeNCollectors(n int, startingIndex int) map[string]*Collector {
 	return toReturn
 }
 
-func MakeNNewTargetsWithEmptyCollectors(n int, startingIndex int) []*target.Item {
+func MakeNNewTargetsWithEmptyCollectors(n, startingIndex int) []*target.Item {
 	toReturn := []*target.Item{}
 	for i := startingIndex; i < n+startingIndex; i++ {
 		label := labels.New(
@@ -59,7 +60,22 @@ func MakeNNewTargetsWithEmptyCollectors(n int, startingIndex int) []*target.Item
 			labels.Label{Name: "total", Value: strconv.Itoa(n + startingIndex)},
 			labels.Label{Name: "__meta_kubernetes_pod_node_name", Value: "node-0"},
 		)
-		newTarget := target.NewItem(fmt.Sprintf("test-job-%d", i), fmt.Sprintf("test-url-%d", i), label, "")
+		jobName := fmt.Sprintf("test-job-%d", i)
+		newTarget := target.NewItem(jobName, fmt.Sprintf("test-url-%d", i), label, "", target.HashLabels(label, jobName))
+		toReturn = append(toReturn, newTarget)
+	}
+	return toReturn
+}
+
+// MakeNTargetsForJob creates n targets all belonging to the same job.
+func MakeNTargetsForJob(n int, jobName string, startingIndex int) []*target.Item {
+	toReturn := []*target.Item{}
+	for i := startingIndex; i < n+startingIndex; i++ {
+		label := labels.New(
+			labels.Label{Name: "i", Value: strconv.Itoa(i)},
+			labels.Label{Name: "total", Value: strconv.Itoa(n + startingIndex)},
+		)
+		newTarget := target.NewItem(jobName, fmt.Sprintf("test-url-%d", i), label, "", target.HashLabels(label, jobName))
 		toReturn = append(toReturn, newTarget)
 	}
 	return toReturn

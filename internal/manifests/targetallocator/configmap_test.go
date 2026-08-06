@@ -4,7 +4,7 @@
 package targetallocator
 
 import (
-	"fmt"
+	"errors"
 	"testing"
 	"time"
 
@@ -62,7 +62,6 @@ filter_strategy: relabel-config
 		assert.Equal(t, "my-instance-targetallocator", actual.Name)
 		assert.Equal(t, expectedLabels, actual.Labels)
 		assert.Equal(t, expectedData[targetAllocatorFilename], actual.Data[targetAllocatorFilename])
-
 	})
 	t.Run("should return target allocator config map without collector", func(t *testing.T) {
 		expectedData := map[string]string{
@@ -83,7 +82,6 @@ filter_strategy: relabel-config
 		assert.Equal(t, "my-instance-targetallocator", actual.Name)
 		assert.Equal(t, expectedLabels, actual.Labels)
 		assert.Equal(t, expectedData[targetAllocatorFilename], actual.Data[targetAllocatorFilename])
-
 	})
 	t.Run("should return target allocator config map without scrape configs", func(t *testing.T) {
 		expectedData := map[string]string{
@@ -116,7 +114,6 @@ filter_strategy: relabel-config
 		assert.Equal(t, "my-instance-targetallocator", actual.Name)
 		assert.Equal(t, expectedLabels, actual.Labels)
 		assert.Equal(t, expectedData[targetAllocatorFilename], actual.Data[targetAllocatorFilename])
-
 	})
 	t.Run("should return expected target allocator config map with label selectors", func(t *testing.T) {
 		expectedData := map[string]string{
@@ -146,18 +143,22 @@ config:
 filter_strategy: relabel-config
 prometheus_cr:
   enabled: true
+  pod_monitor_namespace_selector: null
   pod_monitor_selector:
     matchlabels:
       release: my-instance
     matchexpressions: []
+  probe_namespace_selector: null
   probe_selector:
     matchlabels:
       release: my-instance
     matchexpressions: []
+  scrape_config_namespace_selector: null
   scrape_config_selector:
     matchlabels:
       release: my-instance
     matchexpressions: []
+  service_monitor_namespace_selector: null
   service_monitor_selector:
     matchlabels:
       release: my-instance
@@ -174,17 +175,20 @@ prometheus_cr:
 		targetAllocator.Spec.PrometheusCR.ServiceMonitorSelector = &metav1.LabelSelector{
 			MatchLabels: map[string]string{
 				"release": "my-instance",
-			}}
+			},
+		}
 		targetAllocator.Spec.PrometheusCR.ScrapeConfigSelector = &metav1.LabelSelector{
 			MatchLabels: map[string]string{
 				"release": "my-instance",
-			}}
+			},
+		}
 		targetAllocator.Spec.PrometheusCR.ProbeSelector = &metav1.LabelSelector{
 			MatchLabels: map[string]string{
 				"release": "my-instance",
-			}}
+			},
+		}
 		targetAllocator.Spec.GlobalConfig = v1beta1.AnyConfig{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"scrape_interval":  "30s",
 				"scrape_protocols": []string{"PrometheusProto", "OpenMetricsText1.0.0", "OpenMetricsText0.0.1", "PrometheusText0.0.4"},
 			},
@@ -198,9 +202,98 @@ prometheus_cr:
 		assert.Equal(t, "my-instance-targetallocator", actual.Name)
 		assert.Equal(t, expectedLabels, actual.Labels)
 		assert.Equal(t, expectedData, actual.Data)
-
 	})
-	t.Run("should return expected target allocator config map with scrape interval set", func(t *testing.T) {
+
+	t.Run("should return expected target allocator config map with namespace label selectors", func(t *testing.T) {
+		expectedData := map[string]string{
+			targetAllocatorFilename: `allocation_strategy: consistent-hashing
+collector_selector:
+  matchlabels:
+    app.kubernetes.io/component: opentelemetry-collector
+    app.kubernetes.io/instance: default.my-instance
+    app.kubernetes.io/managed-by: opentelemetry-operator
+    app.kubernetes.io/part-of: opentelemetry
+  matchexpressions: []
+config:
+  global:
+    scrape_interval: 30s
+    scrape_protocols:
+    - PrometheusProto
+    - OpenMetricsText1.0.0
+    - OpenMetricsText0.0.1
+    - PrometheusText0.0.4
+  scrape_configs:
+  - job_name: otel-collector
+    scrape_interval: 10s
+    static_configs:
+    - targets:
+      - 0.0.0.0:8888
+      - 0.0.0.0:9999
+filter_strategy: relabel-config
+prometheus_cr:
+  enabled: true
+  pod_monitor_namespace_selector:
+    matchlabels:
+      release: my-instance
+    matchexpressions: []
+  pod_monitor_selector: null
+  probe_namespace_selector:
+    matchlabels:
+      release: my-instance
+    matchexpressions: []
+  probe_selector: null
+  scrape_config_namespace_selector:
+    matchlabels:
+      release: my-instance
+    matchexpressions: []
+  scrape_config_selector: null
+  service_monitor_namespace_selector:
+    matchlabels:
+      release: my-instance
+    matchexpressions: []
+  service_monitor_selector: null
+`,
+		}
+		targetAllocator := targetAllocatorInstance()
+		targetAllocator.Spec.PrometheusCR.Enabled = true
+		targetAllocator.Spec.PrometheusCR.PodMonitorNamespaceSelector = &metav1.LabelSelector{
+			MatchLabels: map[string]string{
+				"release": "my-instance",
+			},
+		}
+		targetAllocator.Spec.PrometheusCR.ServiceMonitorNamespaceSelector = &metav1.LabelSelector{
+			MatchLabels: map[string]string{
+				"release": "my-instance",
+			},
+		}
+		targetAllocator.Spec.PrometheusCR.ScrapeConfigNamespaceSelector = &metav1.LabelSelector{
+			MatchLabels: map[string]string{
+				"release": "my-instance",
+			},
+		}
+		targetAllocator.Spec.PrometheusCR.ProbeNamespaceSelector = &metav1.LabelSelector{
+			MatchLabels: map[string]string{
+				"release": "my-instance",
+			},
+		}
+		targetAllocator.Spec.GlobalConfig = v1beta1.AnyConfig{
+			Object: map[string]any{
+				"scrape_interval":  "30s",
+				"scrape_protocols": []string{"PrometheusProto", "OpenMetricsText1.0.0", "OpenMetricsText0.0.1", "PrometheusText0.0.4"},
+			},
+		}
+		testParams := Params{
+			Collector:       collectorInstance(),
+			TargetAllocator: targetAllocator,
+		}
+		actual, err := ConfigMap(testParams)
+		assert.NoError(t, err)
+		assert.Equal(t, "my-instance-targetallocator", actual.Name)
+		assert.Equal(t, expectedLabels, actual.Labels)
+		assert.Equal(t, expectedData, actual.Data)
+	})
+
+	t.Run("should return expected target allocator config map with scrape and evaluation intervals and protocols set", func(t *testing.T) {
 		expectedData := map[string]string{
 			targetAllocatorFilename: `allocation_strategy: consistent-hashing
 collector_selector:
@@ -221,10 +314,17 @@ config:
 filter_strategy: relabel-config
 prometheus_cr:
   enabled: true
+  evaluation_interval: 30s
+  pod_monitor_namespace_selector: null
   pod_monitor_selector: null
+  probe_namespace_selector: null
   probe_selector: null
+  scrape_config_namespace_selector: null
   scrape_config_selector: null
   scrape_interval: 30s
+  scrape_protocols:
+  - PrometheusText1.0.0
+  service_monitor_namespace_selector: null
   service_monitor_selector: null
 `,
 		}
@@ -232,6 +332,8 @@ prometheus_cr:
 		targetAllocator := targetAllocatorInstance()
 		targetAllocator.Spec.PrometheusCR.Enabled = true
 		targetAllocator.Spec.PrometheusCR.ScrapeInterval = &metav1.Duration{Duration: time.Second * 30}
+		targetAllocator.Spec.PrometheusCR.EvaluationInterval = &metav1.Duration{Duration: time.Second * 30}
+		targetAllocator.Spec.PrometheusCR.ScrapeProtocols = []string{"PrometheusText1.0.0"}
 		testParams := Params{
 			Collector:       collectorInstance(),
 			TargetAllocator: targetAllocator,
@@ -242,7 +344,6 @@ prometheus_cr:
 		assert.Equal(t, "my-instance-targetallocator", actual.Name)
 		assert.Equal(t, expectedLabels, actual.Labels)
 		assert.Equal(t, expectedData, actual.Data)
-
 	})
 
 	t.Run("should return expected target allocator config map with scrape classes set", func(t *testing.T) {
@@ -266,7 +367,9 @@ config:
 filter_strategy: relabel-config
 prometheus_cr:
   enabled: true
+  pod_monitor_namespace_selector: null
   pod_monitor_selector: null
+  probe_namespace_selector: null
   probe_selector: null
   scrape_classes:
   - default: true
@@ -274,7 +377,9 @@ prometheus_cr:
     relabelings:
     - action: labeldrop
       regex: pod
+  scrape_config_namespace_selector: null
   scrape_config_selector: null
+  service_monitor_namespace_selector: null
   service_monitor_selector: null
 `,
 		}
@@ -314,16 +419,14 @@ prometheus_cr:
 		cfg := config.Config{
 			CertManagerAvailability: certmanager.Available,
 		}
-
-		flgs := featuregate.Flags(colfg.GlobalRegistry())
-		err := flgs.Parse([]string{"--feature-gates=operator.targetallocator.mtls"})
-		require.NoError(t, err)
+		targetAllocator := targetAllocatorInstance()
 
 		testParams := Params{
 			Collector:       collectorInstance(),
-			TargetAllocator: targetAllocatorInstance(),
+			TargetAllocator: targetAllocator,
 			Config:          cfg,
 		}
+		testParams.TargetAllocator.Spec.Mtls = &v1beta1.TargetAllocatorMTLS{Enabled: true}
 
 		expectedData := map[string]string{
 			targetAllocatorFilename: `allocation_strategy: consistent-hashing
@@ -371,12 +474,14 @@ https:
 		flgs := featuregate.Flags(colfg.GlobalRegistry())
 		err := flgs.Parse([]string{"--feature-gates=operator.targetallocator.fallbackstrategy"})
 		require.NoError(t, err)
+		targetAllocator := targetAllocatorInstance()
 
 		testParams := Params{
 			Collector:       collectorInstance(),
-			TargetAllocator: targetAllocatorInstance(),
+			TargetAllocator: targetAllocator,
 			Config:          cfg,
 		}
+		testParams.TargetAllocator.Spec.Mtls = &v1beta1.TargetAllocatorMTLS{Enabled: true}
 
 		expectedData := map[string]string{
 			targetAllocatorFilename: `allocation_fallback_strategy: consistent-hashing
@@ -426,7 +531,7 @@ func TestGetScrapeConfigsFromOtelConfig(t *testing.T) {
 			name: "empty scrape configs list",
 			input: v1beta1.Config{
 				Receivers: v1beta1.AnyConfig{
-					Object: map[string]interface{}{
+					Object: map[string]any{
 						"prometheus": map[string]any{
 							"config": map[string]any{
 								"scrape_configs": []any{},
@@ -441,20 +546,31 @@ func TestGetScrapeConfigsFromOtelConfig(t *testing.T) {
 			name: "no scrape configs key",
 			input: v1beta1.Config{
 				Receivers: v1beta1.AnyConfig{
-					Object: map[string]interface{}{
+					Object: map[string]any{
 						"prometheus": map[string]any{
 							"config": map[string]any{},
 						},
 					},
 				},
 			},
-			wantErr: fmt.Errorf("no scrape_configs available as part of the configuration"),
+			wantErr: errors.New("no scrape_configs available as part of the configuration"),
+		},
+		{
+			name: "no prom config key",
+			input: v1beta1.Config{
+				Receivers: v1beta1.AnyConfig{
+					Object: map[string]any{
+						"prometheus": map[string]any{},
+					},
+				},
+			},
+			want: []v1beta1.AnyConfig{},
 		},
 		{
 			name: "one scrape config",
 			input: v1beta1.Config{
 				Receivers: v1beta1.AnyConfig{
-					Object: map[string]interface{}{
+					Object: map[string]any{
 						"prometheus": map[string]any{
 							"config": map[string]any{
 								"scrape_configs": []any{
@@ -468,14 +584,14 @@ func TestGetScrapeConfigsFromOtelConfig(t *testing.T) {
 				},
 			},
 			want: []v1beta1.AnyConfig{
-				{Object: map[string]interface{}{"job": "somejob"}},
+				{Object: map[string]any{"job": "somejob"}},
 			},
 		},
 		{
 			name: "regex substitution",
 			input: v1beta1.Config{
 				Receivers: v1beta1.AnyConfig{
-					Object: map[string]interface{}{
+					Object: map[string]any{
 						"prometheus": map[string]any{
 							"config": map[string]any{
 								"scrape_configs": []any{
@@ -496,7 +612,7 @@ func TestGetScrapeConfigsFromOtelConfig(t *testing.T) {
 				},
 			},
 			want: []v1beta1.AnyConfig{
-				{Object: map[string]interface{}{
+				{Object: map[string]any{
 					"job": "somejob",
 					"metric_relabel_configs": []any{
 						map[any]any{
@@ -511,7 +627,6 @@ func TestGetScrapeConfigsFromOtelConfig(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			configStr, err := testCase.input.Yaml()
 			require.NoError(t, err)
@@ -537,10 +652,10 @@ func TestGetGlobalConfigFromOtelConfig(t *testing.T) {
 			args: args{
 				otelConfig: v1beta1.Config{
 					Receivers: v1beta1.AnyConfig{
-						Object: map[string]interface{}{
-							"prometheus": map[string]interface{}{
-								"config": map[string]interface{}{
-									"global": map[string]interface{}{
+						Object: map[string]any{
+							"prometheus": map[string]any{
+								"config": map[string]any{
+									"global": map[string]any{
 										"scrape_interval":  "15s",
 										"scrape_protocols": []string{"PrometheusProto", "OpenMetricsText1.0.0", "OpenMetricsText0.0.1", "PrometheusText0.0.4"},
 									},
@@ -551,7 +666,7 @@ func TestGetGlobalConfigFromOtelConfig(t *testing.T) {
 				},
 			},
 			want: v1beta1.AnyConfig{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"scrape_interval":  "15s",
 					"scrape_protocols": []string{"PrometheusProto", "OpenMetricsText1.0.0", "OpenMetricsText0.0.1", "PrometheusText0.0.4"},
 				},
@@ -563,9 +678,9 @@ func TestGetGlobalConfigFromOtelConfig(t *testing.T) {
 			args: args{
 				otelConfig: v1beta1.Config{
 					Receivers: v1beta1.AnyConfig{
-						Object: map[string]interface{}{
-							"prometheus": map[string]interface{}{
-								"config": map[string]interface{}{},
+						Object: map[string]any{
+							"prometheus": map[string]any{
+								"config": map[string]any{},
 							},
 						},
 					},
@@ -601,7 +716,7 @@ func TestGetScrapeConfigs(t *testing.T) {
 				taScrapeConfigs: []v1beta1.AnyConfig{},
 				collectorConfig: v1beta1.Config{
 					Receivers: v1beta1.AnyConfig{
-						Object: map[string]interface{}{
+						Object: map[string]any{
 							"prometheus": map[string]any{
 								"config": map[string]any{
 									"scrape_configs": []any{},
@@ -625,7 +740,7 @@ func TestGetScrapeConfigs(t *testing.T) {
 				},
 				collectorConfig: v1beta1.Config{
 					Receivers: v1beta1.AnyConfig{
-						Object: map[string]interface{}{
+						Object: map[string]any{
 							"prometheus": map[string]any{
 								"config": map[string]any{
 									"scrape_configs": []any{
@@ -650,7 +765,7 @@ func TestGetScrapeConfigs(t *testing.T) {
 				taScrapeConfigs: []v1beta1.AnyConfig{},
 				collectorConfig: v1beta1.Config{
 					Receivers: v1beta1.AnyConfig{
-						Object: map[string]interface{}{
+						Object: map[string]any{
 							"prometheus": map[string]any{
 								"config": map[string]any{},
 							},
@@ -658,12 +773,11 @@ func TestGetScrapeConfigs(t *testing.T) {
 					},
 				},
 			},
-			wantErr: fmt.Errorf("no scrape_configs available as part of the configuration"),
+			wantErr: errors.New("no scrape_configs available as part of the configuration"),
 		},
 	}
 
 	for _, testCase := range testCases {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			actual, err := getScrapeConfigs(testCase.args.taScrapeConfigs, testCase.args.collectorConfig)
 			assert.Equal(t, testCase.wantErr, err)
@@ -688,10 +802,10 @@ func TestGetGlobalConfig(t *testing.T) {
 			args: args{
 				collectorConfig: v1beta1.Config{
 					Receivers: v1beta1.AnyConfig{
-						Object: map[string]interface{}{
-							"prometheus": map[string]interface{}{
-								"config": map[string]interface{}{
-									"global": map[string]interface{}{
+						Object: map[string]any{
+							"prometheus": map[string]any{
+								"config": map[string]any{
+									"global": map[string]any{
 										"scrape_interval": "15s",
 									},
 								},
@@ -700,12 +814,12 @@ func TestGetGlobalConfig(t *testing.T) {
 					},
 				},
 				taGlobalConfig: v1beta1.AnyConfig{
-					Object: map[string]interface{}{
+					Object: map[string]any{
 						"scrape_protocols": []string{"PrometheusProto"},
 					},
 				},
 			},
-			want: map[string]interface{}{
+			want: map[string]any{
 				"scrape_protocols": []string{"PrometheusProto"},
 			},
 		},
@@ -714,20 +828,20 @@ func TestGetGlobalConfig(t *testing.T) {
 			args: args{
 				collectorConfig: v1beta1.Config{
 					Receivers: v1beta1.AnyConfig{
-						Object: map[string]interface{}{
-							"prometheus": map[string]interface{}{
-								"config": map[string]interface{}{},
+						Object: map[string]any{
+							"prometheus": map[string]any{
+								"config": map[string]any{},
 							},
 						},
 					},
 				},
 				taGlobalConfig: v1beta1.AnyConfig{
-					Object: map[string]interface{}{
+					Object: map[string]any{
 						"scrape_protocols": []string{"PrometheusProto"},
 					},
 				},
 			},
-			want: map[string]interface{}{
+			want: map[string]any{
 				"scrape_protocols": []string{"PrometheusProto"},
 			},
 		},
@@ -736,10 +850,10 @@ func TestGetGlobalConfig(t *testing.T) {
 			args: args{
 				collectorConfig: v1beta1.Config{
 					Receivers: v1beta1.AnyConfig{
-						Object: map[string]interface{}{
-							"prometheus": map[string]interface{}{
-								"config": map[string]interface{}{
-									"global": map[string]interface{}{
+						Object: map[string]any{
+							"prometheus": map[string]any{
+								"config": map[string]any{
+									"global": map[string]any{
 										"scrape_interval": "15s",
 									},
 								},
@@ -749,7 +863,7 @@ func TestGetGlobalConfig(t *testing.T) {
 				},
 				taGlobalConfig: v1beta1.AnyConfig{},
 			},
-			want: map[string]interface{}{
+			want: map[string]any{
 				"scrape_interval": "15s",
 			},
 		},
@@ -758,7 +872,7 @@ func TestGetGlobalConfig(t *testing.T) {
 			args: args{
 				collectorConfig: v1beta1.Config{
 					Receivers: v1beta1.AnyConfig{
-						Object: map[string]interface{}{
+						Object: map[string]any{
 							"prometheus": "invalid_value",
 						},
 					},
@@ -817,5 +931,99 @@ filter_strategy: relabel-config
 
 		assert.Equal(t, "my-instance-targetallocator", actual.Name)
 		assert.Equal(t, expectedData[targetAllocatorFilename], actual.Data[targetAllocatorFilename])
+	})
+}
+
+func TestDesiredConfigMapAllowInsecureAuthSecrets(t *testing.T) {
+	flgs := featuregate.Flags(colfg.GlobalRegistry())
+	_ = flgs.Parse([]string{"--feature-gates=operator.targetallocator.fallbackstrategy"})
+
+	expectedData := map[string]string{
+		targetAllocatorFilename: `allocation_fallback_strategy: consistent-hashing
+allocation_strategy: consistent-hashing
+allow_insecure_auth_secrets: true
+collector_selector:
+  matchlabels:
+    app.kubernetes.io/component: opentelemetry-collector
+    app.kubernetes.io/instance: default.my-instance
+    app.kubernetes.io/managed-by: opentelemetry-operator
+    app.kubernetes.io/part-of: opentelemetry
+  matchexpressions: []
+config:
+  scrape_configs:
+  - job_name: otel-collector
+    scrape_interval: 10s
+    static_configs:
+    - targets:
+      - 0.0.0.0:8888
+      - 0.0.0.0:9999
+filter_strategy: relabel-config
+`,
+	}
+	ta := targetAllocatorInstance()
+	ta.Spec.AllowInsecureAuthSecrets = true
+	testParams := Params{
+		Collector:       collectorInstance(),
+		TargetAllocator: ta,
+	}
+	actual, err := ConfigMap(testParams)
+	require.NoError(t, err)
+
+	assert.Equal(t, "my-instance-targetallocator", actual.Name)
+	assert.Equal(t, expectedData[targetAllocatorFilename], actual.Data[targetAllocatorFilename])
+}
+
+func TestDesiredConfigMapWithDenyFSAccessThroughSMs(t *testing.T) {
+	t.Run("should return expected target allocator config map with denyFSAccessThroughSMs", func(t *testing.T) {
+		require.NoError(t, colfg.GlobalRegistry().Set("operator.targetallocator.fallbackstrategy", true))
+		t.Cleanup(func() {
+			require.NoError(t, colfg.GlobalRegistry().Set("operator.targetallocator.fallbackstrategy", false))
+		})
+
+		expectedData := map[string]string{
+			targetAllocatorFilename: `allocation_fallback_strategy: consistent-hashing
+allocation_strategy: consistent-hashing
+collector_selector:
+  matchlabels:
+    app.kubernetes.io/component: opentelemetry-collector
+    app.kubernetes.io/instance: default.my-instance
+    app.kubernetes.io/managed-by: opentelemetry-operator
+    app.kubernetes.io/part-of: opentelemetry
+  matchexpressions: []
+config:
+  scrape_configs:
+  - job_name: otel-collector
+    scrape_interval: 10s
+    static_configs:
+    - targets:
+      - 0.0.0.0:8888
+      - 0.0.0.0:9999
+filter_strategy: relabel-config
+prometheus_cr:
+  deny_fs_access_through_sms: true
+  enabled: true
+  pod_monitor_namespace_selector: null
+  pod_monitor_selector: null
+  probe_namespace_selector: null
+  probe_selector: null
+  scrape_config_namespace_selector: null
+  scrape_config_selector: null
+  service_monitor_namespace_selector: null
+  service_monitor_selector: null
+`,
+		}
+
+		targetAllocator := targetAllocatorInstance()
+		targetAllocator.Spec.PrometheusCR.Enabled = true
+		targetAllocator.Spec.PrometheusCR.DenyFSAccessThroughSMs = true
+		testParams := Params{
+			Collector:       collectorInstance(),
+			TargetAllocator: targetAllocator,
+		}
+		actual, err := ConfigMap(testParams)
+		assert.NoError(t, err)
+
+		assert.Equal(t, "my-instance-targetallocator", actual.Name)
+		assert.Equal(t, expectedData, actual.Data)
 	})
 }

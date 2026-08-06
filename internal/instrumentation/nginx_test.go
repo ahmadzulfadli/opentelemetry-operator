@@ -10,17 +10,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	semconv "go.opentelemetry.io/otel/semconv/v1.7.0"
 	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/open-telemetry/opentelemetry-operator/apis/v1alpha1"
 )
 
-var nginxSdkInitContainerTestCommand = "echo -e $OTEL_NGINX_I13N_SCRIPT > /opt/opentelemetry-webserver/agent/nginx_instrumentation.sh && chmod +x /opt/opentelemetry-webserver/agent/nginx_instrumentation.sh && cat /opt/opentelemetry-webserver/agent/nginx_instrumentation.sh && /opt/opentelemetry-webserver/agent/nginx_instrumentation.sh \"/opt/opentelemetry-webserver/agent\" \"/opt/opentelemetry-webserver/source-conf\" \"nginx.conf\" \"<<SID-PLACEHOLDER>>\""
-var nginxSdkInitContainerTestCommandCustomFile = "echo -e $OTEL_NGINX_I13N_SCRIPT > /opt/opentelemetry-webserver/agent/nginx_instrumentation.sh && chmod +x /opt/opentelemetry-webserver/agent/nginx_instrumentation.sh && cat /opt/opentelemetry-webserver/agent/nginx_instrumentation.sh && /opt/opentelemetry-webserver/agent/nginx_instrumentation.sh \"/opt/opentelemetry-webserver/agent\" \"/opt/opentelemetry-webserver/source-conf\" \"custom-nginx.conf\" \"<<SID-PLACEHOLDER>>\""
-var nginxSdkInitContainerI13nScript = "\nNGINX_AGENT_DIR_FULL=$1\t\\n\nNGINX_AGENT_CONF_DIR_FULL=$2 \\n\nNGINX_CONFIG_FILE=$3 \\n\nNGINX_SID_PLACEHOLDER=$4 \\n\nNGINX_SID_VALUE=$5 \\n\necho \"Input Parameters: $@\" \\n\nset -x \\n\n\\n\ncp -r /opt/opentelemetry/* ${NGINX_AGENT_DIR_FULL} \\n\n\\n\nNGINX_VERSION=$(cat ${NGINX_AGENT_CONF_DIR_FULL}/version.txt) \\n\nNGINX_AGENT_LOG_DIR=$(echo \"${NGINX_AGENT_DIR_FULL}/logs\" | sed 's,/,\\\\/,g') \\n\n\\n\ncat ${NGINX_AGENT_DIR_FULL}/conf/opentelemetry_sdk_log4cxx.xml.template | sed 's,__agent_log_dir__,'${NGINX_AGENT_LOG_DIR}',g'  > ${NGINX_AGENT_DIR_FULL}/conf/opentelemetry_sdk_log4cxx.xml \\n\necho -e $OTEL_NGINX_AGENT_CONF > ${NGINX_AGENT_CONF_DIR_FULL}/opentelemetry_agent.conf \\n\nsed -i \"s,${NGINX_SID_PLACEHOLDER},${OTEL_NGINX_SERVICE_INSTANCE_ID},g\" ${NGINX_AGENT_CONF_DIR_FULL}/opentelemetry_agent.conf \\n\nsed -i \"1s,^,load_module ${NGINX_AGENT_DIR_FULL}/WebServerModule/Nginx/${NGINX_VERSION}/ngx_http_opentelemetry_module.so;\\\\n,g\" ${NGINX_AGENT_CONF_DIR_FULL}/${NGINX_CONFIG_FILE} \\n\nsed -i \"1s,^,env OTEL_RESOURCE_ATTRIBUTES;\\\\n,g\" ${NGINX_AGENT_CONF_DIR_FULL}/${NGINX_CONFIG_FILE} \\n\nmv ${NGINX_AGENT_CONF_DIR_FULL}/opentelemetry_agent.conf  ${NGINX_AGENT_CONF_DIR_FULL}/conf.d \\n\n\t\t"
+var (
+	nginxSdkInitContainerTestArgs           = []string{nginxAgentScript, "--", "nginx.conf"}
+	nginxSdkInitContainerTestArgsCustomFile = []string{nginxAgentScript, "--", "custom-nginx.conf"}
+)
 
 func TestInjectNginxSDK(t *testing.T) {
-
 	tests := []struct {
 		name string
 		v1alpha1.Nginx
@@ -44,12 +44,12 @@ func TestInjectNginxSDK(t *testing.T) {
 						{},
 					},
 				},
-				ObjectMeta: v1.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "my-nginx-6c44bcbdd",
 				},
 			},
 			expected: corev1.Pod{
-				ObjectMeta: v1.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "my-nginx-6c44bcbdd",
 				},
 				Spec: corev1.PodSpec{
@@ -72,7 +72,7 @@ func TestInjectNginxSDK(t *testing.T) {
 							Name:    nginxAgentCloneContainerName,
 							Image:   "",
 							Command: []string{"/bin/sh", "-c"},
-							Args:    []string{"cp -r /etc/nginx/* /opt/opentelemetry-webserver/source-conf && export NGINX_VERSION=\"$( { nginx -v ; } 2>&1 )\" && echo ${NGINX_VERSION##*/} > /opt/opentelemetry-webserver/source-conf/version.txt"},
+							Args:    []string{nginxCloneScript, "--", "/etc/nginx"},
 							VolumeMounts: []corev1.VolumeMount{{
 								Name:      nginxAgentConfigVolume,
 								MountPath: nginxAgentConfDirFull,
@@ -82,15 +82,11 @@ func TestInjectNginxSDK(t *testing.T) {
 							Name:    nginxAgentInitContainerName,
 							Image:   "foo/bar:1",
 							Command: []string{"/bin/sh", "-c"},
-							Args:    []string{nginxSdkInitContainerTestCommand},
+							Args:    nginxSdkInitContainerTestArgs,
 							Env: []corev1.EnvVar{
 								{
 									Name:  nginxAttributesEnvVar,
 									Value: "NginxModuleEnabled ON;\nNginxModuleOtelExporterEndpoint http://otlp-endpoint:4317;\nNginxModuleOtelMaxQueueSize 4096;\nNginxModuleOtelSpanExporter otlp;\nNginxModuleResolveBackends ON;\nNginxModuleServiceInstanceId <<SID-PLACEHOLDER>>;\nNginxModuleServiceName nginx-service-name;\nNginxModuleServiceNamespace req-namespace;\nNginxModuleTraceAsError ON;\n",
-								},
-								{
-									Name:  "OTEL_NGINX_I13N_SCRIPT",
-									Value: nginxSdkInitContainerI13nScript,
 								},
 								{
 									Name: nginxServiceInstanceIdEnvVar,
@@ -144,7 +140,7 @@ func TestInjectNginxSDK(t *testing.T) {
 				ConfigFile: "/opt/nginx/custom-nginx.conf",
 			},
 			pod: corev1.Pod{
-				ObjectMeta: v1.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "my-nginx-6c44bcbdd",
 				},
 				Spec: corev1.PodSpec{
@@ -154,7 +150,7 @@ func TestInjectNginxSDK(t *testing.T) {
 				},
 			},
 			expected: corev1.Pod{
-				ObjectMeta: v1.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "my-nginx-6c44bcbdd",
 				},
 				Spec: corev1.PodSpec{
@@ -177,7 +173,7 @@ func TestInjectNginxSDK(t *testing.T) {
 							Name:    nginxAgentCloneContainerName,
 							Image:   "",
 							Command: []string{"/bin/sh", "-c"},
-							Args:    []string{"cp -r /opt/nginx/* /opt/opentelemetry-webserver/source-conf && export NGINX_VERSION=\"$( { nginx -v ; } 2>&1 )\" && echo ${NGINX_VERSION##*/} > /opt/opentelemetry-webserver/source-conf/version.txt"},
+							Args:    []string{nginxCloneScript, "--", "/opt/nginx"},
 							VolumeMounts: []corev1.VolumeMount{{
 								Name:      nginxAgentConfigVolume,
 								MountPath: nginxAgentConfDirFull,
@@ -187,15 +183,11 @@ func TestInjectNginxSDK(t *testing.T) {
 							Name:    nginxAgentInitContainerName,
 							Image:   "foo/bar:1",
 							Command: []string{"/bin/sh", "-c"},
-							Args:    []string{nginxSdkInitContainerTestCommandCustomFile},
+							Args:    nginxSdkInitContainerTestArgsCustomFile,
 							Env: []corev1.EnvVar{
 								{
 									Name:  nginxAttributesEnvVar,
 									Value: "NginxModuleEnabled ON;\nNginxModuleOtelExporterEndpoint http://otlp-endpoint:4317;\nNginxModuleOtelSpanExporter otlp;\nNginxModuleResolveBackends ON;\nNginxModuleServiceInstanceId <<SID-PLACEHOLDER>>;\nNginxModuleServiceName nginx-service-name;\nNginxModuleServiceNamespace req-namespace;\nNginxModuleTraceAsError ON;\n",
-								},
-								{
-									Name:  "OTEL_NGINX_I13N_SCRIPT",
-									Value: nginxSdkInitContainerI13nScript,
 								},
 								{
 									Name: nginxServiceInstanceIdEnvVar,
@@ -239,7 +231,8 @@ func TestInjectNginxSDK(t *testing.T) {
 						},
 					},
 				},
-			}},
+			},
+		},
 		// === Test init-container-incompatible fields not copied =============================
 		{
 			name: "Init-container-incompatible fields not copied",
@@ -247,7 +240,7 @@ func TestInjectNginxSDK(t *testing.T) {
 				Image: "foo/bar:1",
 			},
 			pod: corev1.Pod{
-				ObjectMeta: v1.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "my-nginx-6c44bcbdd",
 				},
 				Spec: corev1.PodSpec{
@@ -266,7 +259,7 @@ func TestInjectNginxSDK(t *testing.T) {
 				},
 			},
 			expected: corev1.Pod{
-				ObjectMeta: v1.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "my-nginx-6c44bcbdd",
 				},
 				Spec: corev1.PodSpec{
@@ -289,7 +282,7 @@ func TestInjectNginxSDK(t *testing.T) {
 							Name:    nginxAgentCloneContainerName,
 							Image:   "",
 							Command: []string{"/bin/sh", "-c"},
-							Args:    []string{"cp -r /etc/nginx/* /opt/opentelemetry-webserver/source-conf && export NGINX_VERSION=\"$( { nginx -v ; } 2>&1 )\" && echo ${NGINX_VERSION##*/} > /opt/opentelemetry-webserver/source-conf/version.txt"},
+							Args:    []string{nginxCloneScript, "--", "/etc/nginx"},
 							VolumeMounts: []corev1.VolumeMount{{
 								Name:      nginxAgentConfigVolume,
 								MountPath: nginxAgentConfDirFull,
@@ -299,15 +292,11 @@ func TestInjectNginxSDK(t *testing.T) {
 							Name:    nginxAgentInitContainerName,
 							Image:   "foo/bar:1",
 							Command: []string{"/bin/sh", "-c"},
-							Args:    []string{nginxSdkInitContainerTestCommand},
+							Args:    nginxSdkInitContainerTestArgs,
 							Env: []corev1.EnvVar{
 								{
 									Name:  nginxAttributesEnvVar,
 									Value: "NginxModuleEnabled ON;\nNginxModuleOtelExporterEndpoint http://otlp-endpoint:4317;\nNginxModuleOtelSpanExporter otlp;\nNginxModuleResolveBackends ON;\nNginxModuleServiceInstanceId <<SID-PLACEHOLDER>>;\nNginxModuleServiceName nginx-service-name;\nNginxModuleServiceNamespace req-namespace;\nNginxModuleTraceAsError ON;\n",
-								},
-								{
-									Name:  "OTEL_NGINX_I13N_SCRIPT",
-									Value: nginxSdkInitContainerI13nScript,
 								},
 								{
 									Name: nginxServiceInstanceIdEnvVar,
@@ -366,7 +355,7 @@ func TestInjectNginxSDK(t *testing.T) {
 			name:  "Pod Namespace specified",
 			Nginx: v1alpha1.Nginx{Image: "foo/bar:1"},
 			pod: corev1.Pod{
-				ObjectMeta: v1.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Namespace: "my-namespace",
 					Name:      "my-nginx-6c44bcbdd",
 				},
@@ -377,7 +366,7 @@ func TestInjectNginxSDK(t *testing.T) {
 				},
 			},
 			expected: corev1.Pod{
-				ObjectMeta: v1.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Namespace: "my-namespace",
 					Name:      "my-nginx-6c44bcbdd",
 				},
@@ -401,7 +390,7 @@ func TestInjectNginxSDK(t *testing.T) {
 							Name:    nginxAgentCloneContainerName,
 							Image:   "",
 							Command: []string{"/bin/sh", "-c"},
-							Args:    []string{"cp -r /etc/nginx/* /opt/opentelemetry-webserver/source-conf && export NGINX_VERSION=\"$( { nginx -v ; } 2>&1 )\" && echo ${NGINX_VERSION##*/} > /opt/opentelemetry-webserver/source-conf/version.txt"},
+							Args:    []string{nginxCloneScript, "--", "/etc/nginx"},
 							VolumeMounts: []corev1.VolumeMount{{
 								Name:      nginxAgentConfigVolume,
 								MountPath: nginxAgentConfDirFull,
@@ -411,15 +400,11 @@ func TestInjectNginxSDK(t *testing.T) {
 							Name:    nginxAgentInitContainerName,
 							Image:   "foo/bar:1",
 							Command: []string{"/bin/sh", "-c"},
-							Args:    []string{nginxSdkInitContainerTestCommand},
+							Args:    nginxSdkInitContainerTestArgs,
 							Env: []corev1.EnvVar{
 								{
 									Name:  nginxAttributesEnvVar,
 									Value: "NginxModuleEnabled ON;\nNginxModuleOtelExporterEndpoint http://otlp-endpoint:4317;\nNginxModuleOtelSpanExporter otlp;\nNginxModuleResolveBackends ON;\nNginxModuleServiceInstanceId <<SID-PLACEHOLDER>>;\nNginxModuleServiceName nginx-service-name;\nNginxModuleServiceNamespace my-namespace;\nNginxModuleTraceAsError ON;\n",
-								},
-								{
-									Name:  "OTEL_NGINX_I13N_SCRIPT",
-									Value: nginxSdkInitContainerI13nScript,
 								},
 								{
 									Name: nginxServiceInstanceIdEnvVar,
@@ -481,7 +466,6 @@ func TestInjectNginxSDK(t *testing.T) {
 }
 
 func TestInjectNginxUnknownNamespace(t *testing.T) {
-
 	tests := []struct {
 		name string
 		v1alpha1.Nginx
@@ -492,7 +476,7 @@ func TestInjectNginxUnknownNamespace(t *testing.T) {
 			name:  "Clone Container not present, unknown namespace",
 			Nginx: v1alpha1.Nginx{Image: "foo/bar:1"},
 			pod: corev1.Pod{
-				ObjectMeta: v1.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "my-nginx-6c44bcbdd",
 				},
 				Spec: corev1.PodSpec{
@@ -502,7 +486,7 @@ func TestInjectNginxUnknownNamespace(t *testing.T) {
 				},
 			},
 			expected: corev1.Pod{
-				ObjectMeta: v1.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "my-nginx-6c44bcbdd",
 				},
 				Spec: corev1.PodSpec{
@@ -525,7 +509,7 @@ func TestInjectNginxUnknownNamespace(t *testing.T) {
 							Name:    nginxAgentCloneContainerName,
 							Image:   "",
 							Command: []string{"/bin/sh", "-c"},
-							Args:    []string{"cp -r /etc/nginx/* /opt/opentelemetry-webserver/source-conf && export NGINX_VERSION=\"$( { nginx -v ; } 2>&1 )\" && echo ${NGINX_VERSION##*/} > /opt/opentelemetry-webserver/source-conf/version.txt"},
+							Args:    []string{nginxCloneScript, "--", "/etc/nginx"},
 							VolumeMounts: []corev1.VolumeMount{{
 								Name:      nginxAgentConfigVolume,
 								MountPath: nginxAgentConfDirFull,
@@ -535,15 +519,11 @@ func TestInjectNginxUnknownNamespace(t *testing.T) {
 							Name:    nginxAgentInitContainerName,
 							Image:   "foo/bar:1",
 							Command: []string{"/bin/sh", "-c"},
-							Args:    []string{nginxSdkInitContainerTestCommand},
+							Args:    nginxSdkInitContainerTestArgs,
 							Env: []corev1.EnvVar{
 								{
 									Name:  nginxAttributesEnvVar,
 									Value: "NginxModuleEnabled ON;\nNginxModuleOtelExporterEndpoint http://otlp-endpoint:4317;\nNginxModuleOtelSpanExporter otlp;\nNginxModuleResolveBackends ON;\nNginxModuleServiceInstanceId <<SID-PLACEHOLDER>>;\nNginxModuleServiceName nginx-service-name;\nNginxModuleServiceNamespace nginx;\nNginxModuleTraceAsError ON;\n",
-								},
-								{
-									Name:  "OTEL_NGINX_I13N_SCRIPT",
-									Value: nginxSdkInitContainerI13nScript,
 								},
 								{
 									Name: nginxServiceInstanceIdEnvVar,
@@ -601,6 +581,27 @@ func TestInjectNginxUnknownNamespace(t *testing.T) {
 			assert.Equal(t, test.expected, pod)
 		})
 	}
+}
+
+// Regression test: append aliasing corrupts clone init container mounts when
+// the VolumeMounts slice has spare capacity.
+func TestInjectNginxSDKVolumemountAliasing(t *testing.T) {
+	mounts := make([]corev1.VolumeMount, 0, 4)
+	mounts = append(mounts,
+		corev1.VolumeMount{Name: "a", MountPath: "/a"},
+		corev1.VolumeMount{Name: "b", MountPath: "/b"},
+	)
+
+	pod := corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{VolumeMounts: mounts}}}}
+	result := injectNginxSDK(logr.Discard(), v1alpha1.Nginx{Image: "foo/bar:1"},
+		pod, false, &pod.Spec.Containers[0], "http://otlp:4317",
+		map[string]string{string(semconv.K8SDeploymentNameKey): "svc"}, v1alpha1.InstrumentationSpec{})
+
+	clone := result.Spec.InitContainers[0]
+	lastMount := clone.VolumeMounts[len(clone.VolumeMounts)-1]
+	assert.Equal(t, nginxAgentConfigVolume, lastMount.Name,
+		"clone's config mount was corrupted by slice aliasing: %v", clone.VolumeMounts)
+	assert.Equal(t, nginxAgentConfDirFull, lastMount.MountPath)
 }
 
 func TestNginxInitContainerMissing(t *testing.T) {

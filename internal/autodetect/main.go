@@ -18,6 +18,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/certmanager"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/collector"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/fips"
+	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/gatewayapi"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/k8s"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/opampbridge"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/openshift"
@@ -41,6 +42,7 @@ type AutoDetect interface {
 	OpAmpBridgeAvailablity() (opampbridge.Availability, error)
 	FIPSEnabled(ctx context.Context) bool
 	NativeSidecarSupport() (bool, error)
+	GatewayAPIsAvailability() (gatewayapi.ApiAvailability, error)
 }
 
 type k8sVersionDiscovery interface {
@@ -80,7 +82,7 @@ func (a *autoDetect) PrometheusCRsAvailability() (prometheus.Availability, error
 	foundServiceMonitor := false
 	foundPodMonitor := false
 	apiGroups := apiList.Groups
-	for i := 0; i < len(apiGroups); i++ {
+	for i := range apiGroups {
 		if apiGroups[i].Name == "monitoring.coreos.com" {
 			for _, version := range apiGroups[i].Versions {
 				resources, err := a.dcl.ServerResourcesForGroupVersion(version.GroupVersion)
@@ -89,9 +91,10 @@ func (a *autoDetect) PrometheusCRsAvailability() (prometheus.Availability, error
 				}
 
 				for _, resource := range resources.APIResources {
-					if resource.Kind == "ServiceMonitor" {
+					switch resource.Kind {
+					case "ServiceMonitor":
 						foundServiceMonitor = true
-					} else if resource.Kind == "PodMonitor" {
+					case "PodMonitor":
 						foundPodMonitor = true
 					}
 				}
@@ -114,7 +117,7 @@ func (a *autoDetect) OpenShiftRoutesAvailability() (openshift.RoutesAvailability
 	}
 
 	apiGroups := apiList.Groups
-	for i := 0; i < len(apiGroups); i++ {
+	for i := range apiGroups {
 		if apiGroups[i].Name == "route.openshift.io" {
 			return openshift.RoutesAvailable, nil
 		}
@@ -143,7 +146,7 @@ func (a *autoDetect) CertManagerAvailability(ctx context.Context) (certmanager.A
 
 	apiGroups := apiList.Groups
 	certManagerFound := false
-	for i := 0; i < len(apiGroups); i++ {
+	for i := range apiGroups {
 		if apiGroups[i].Name == "cert-manager.io" {
 			certManagerFound = true
 			break
@@ -261,7 +264,7 @@ func (a *autoDetect) OpAmpBridgeAvailablity() (opampbridge.Availability, error) 
 	return opampbridge.NotAvailable, nil
 }
 
-func (a *autoDetect) FIPSEnabled(_ context.Context) bool {
+func (*autoDetect) FIPSEnabled(context.Context) bool {
 	return fips.IsFipsEnabled()
 }
 
@@ -275,6 +278,21 @@ func (a *autoDetect) NativeSidecarSupport() (bool, error) {
 
 	minimumVersion := version.MustParseGeneric("1.29.0")
 	return currentVersion.AtLeast(minimumVersion), nil
+}
+
+func (a *autoDetect) GatewayAPIsAvailability() (gatewayapi.ApiAvailability, error) {
+	apiList, err := a.dcl.ServerGroups()
+	if err != nil {
+		return gatewayapi.ApiNotAvailable, err
+	}
+
+	for _, group := range apiList.Groups {
+		if group.Name == "gateway.networking.k8s.io" {
+			return gatewayapi.ApiAvailable, nil
+		}
+	}
+
+	return gatewayapi.ApiNotAvailable, nil
 }
 
 // ApplyAutoDetect attempts to automatically detect relevant information for this operator.
@@ -337,6 +355,13 @@ func ApplyAutoDetect(autoDetect AutoDetect, c *config.Config, logger logr.Logger
 	}
 	c.Internal.NativeSidecarSupport = nativeSidecarSupport
 	logger.V(2).Info("determined native sidecar support", "availability", c.Internal.NativeSidecarSupport)
+
+	gapiAvl, err := autoDetect.GatewayAPIsAvailability()
+	if err != nil {
+		return err
+	}
+	c.GatewayAPIsAvailability = gapiAvl
+	logger.V(2).Info("determined Gateway API availability", "availability", gapiAvl)
 
 	return nil
 }

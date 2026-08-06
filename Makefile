@@ -1,5 +1,9 @@
+# Run e2e tests for httpRoute
+.PHONY: e2e-httproute
+e2e-httproute: chainsaw
+	$(CHAINSAW) test --test-dir ./tests/e2e/httpRoute --report-name e2e-httproute
 # Current Operator version
-VERSION ?= $(shell git describe --tags | sed 's/^v//')
+VERSION ?= $(shell git describe --tags --match 'v*' | sed 's/^v//')
 VERSION_DATE ?= $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
 VERSION_PKG ?= github.com/open-telemetry/opentelemetry-operator/internal/version
 OTELCOL_VERSION ?= "$(shell awk -F= '/^opentelemetry-collector=/ {print $$2}' versions.txt)"
@@ -57,6 +61,8 @@ OPERATOROPAMPBRIDGE_IMG ?= ${IMG_PREFIX}/${OPERATOROPAMPBRIDGE_IMG_REPO}:$(addpr
 BRIDGETESTSERVER_IMG_REPO ?= e2e-test-app-bridge-server
 BRIDGETESTSERVER_IMG ?= ${IMG_PREFIX}/${BRIDGETESTSERVER_IMG_REPO}:ve2e
 
+COLLECTOR_IMG ?= ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector:$(subst ",,$(OTELCOL_VERSION))
+
 INSTRUMENTATION_JAVA_IMG_REPO ?= autoinstrumentation-java
 INSTRUMENTATION_JAVA_IMG ?= ${IMG_PREFIX}/${INSTRUMENTATION_JAVA_IMG_REPO}:${INSTRUMENTATION_JAVA_VERSION}
 
@@ -92,6 +98,21 @@ ifeq (,$(CI))
 GOTEST_OPTS=-race $(if $(GOTEST_EXTRA_OPTS),$(GOTEST_EXTRA_OPTS))
 else
 GOTEST_OPTS=-race -v $(if $(GOTEST_EXTRA_OPTS),$(GOTEST_EXTRA_OPTS))
+endif
+
+# Unit-test coverage profile. Generated automatically in CI (where the workflow
+# uploads coverage.out to Codecov) and on demand locally with
+# `make test GOTEST_COVER=true`. coverage.out is matched by the *.out entry in
+# .gitignore. -covermode=atomic is required for correct counts under -race.
+GOTEST_COVER ?= $(if $(CI),true,)
+ifeq ($(GOTEST_COVER),true)
+GOTEST_COVER_OPTS = -coverprofile=coverage.out -covermode=atomic
+# The target allocator integration tests live in a separate module (so the
+# collector/receiver deps stay out of the TA binary) and exercise the real TA
+# code from the main module. -coverpkg attributes that coverage to the
+# otel-allocator packages; the profile is written to the repo root ($(CURDIR))
+# because the recipe cds into the module directory.
+GOTEST_COVER_INTEGRATION_OPTS = -coverprofile=$(CURDIR)/coverage-integration.out -covermode=atomic -coverpkg=github.com/open-telemetry/opentelemetry-operator/cmd/otel-allocator/...
 endif
 
 START_KIND_CLUSTER ?= true
@@ -156,6 +177,12 @@ BUNDLE_BUILD_GEN_FLAGS ?= $(BUNDLE_GEN_FLAGS) --output-dir . --kustomize-dir ../
 
 MIN_KUBERNETES_VERSION ?= 1.25.0
 MIN_OPENSHIFT_VERSION ?= 4.12
+
+## Directories of all Go modules in the repository, root first. The ./... patterns of
+## the root module do not descend into nested modules, so anything that has to happen
+## per module iterates over this list. Hidden directories (.git, worktrees, ...) are
+## skipped.
+GO_MODULE_DIRS ?= $(shell find . -path './.*' -prune -o -name go.mod -print | sed 's|/go\.mod$$||' | sort)
 
 ## On MacOS, use gsed instead of sed, to make sed behavior
 ## consistent with Linux.
@@ -230,7 +257,7 @@ targetallocator:
 # Build opamp bridge binary
 .PHONY: operator-opamp-bridge
 operator-opamp-bridge: generate
-	CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(ARCH) go build -o cmd/operator-opamp-bridge/bin/opampbridge_${ARCH} -trimpath -ldflags "${COMMON_LDFLAGS}" ./cmd/operator-opamp-bridge
+	CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(ARCH) go build -o cmd/operator-opamp-bridge/bin/opampbridge_${ARCH} -trimpath -ldflags "${COMMON_LDFLAGS} ${OPERATOR_LDFLAGS}" ./cmd/operator-opamp-bridge
 
 # Run against the configured Kubernetes cluster in ~/.kube/config
 .PHONY: run
@@ -252,6 +279,7 @@ uninstall: manifests kustomize
 .PHONY: set-image-controller
 set-image-controller: manifests kustomize
 	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
+	cd config/overlays/openshift && $(KUSTOMIZE) edit set image controller=${IMG}
 
 # Add a custom argument to the operator deployment
 .PHONY: add-operator-arg
@@ -315,18 +343,53 @@ add-rbac-permissions-to-operator: manifests kustomize
 	cd config/rbac && $(KUSTOMIZE) edit add patch --kind ClusterRole --name manager-role --path extra-permissions-operator/replicaset.yaml
 	cd config/rbac && $(KUSTOMIZE) edit add patch --kind ClusterRole --name manager-role --path extra-permissions-operator/replicationcontrollers.yaml
 	cd config/rbac && $(KUSTOMIZE) edit add patch --kind ClusterRole --name manager-role --path extra-permissions-operator/resourcequotas.yaml
+	cd config/rbac && $(KUSTOMIZE) edit add patch --kind ClusterRole --name manager-role --path extra-permissions-operator/leases.yaml
 
 ##@ Deploy
 # Deploy controller in the current Kubernetes context, configured in ~/.kube/config
 .PHONY: deploy
-deploy: set-image-controller
+deploy: install-gateway-api-crds set-image-controller
 	$(KUSTOMIZE) build config/default | kubectl apply -f -
-	go run hack/check-operator-ready.go 300
+	kubectl rollout status deployment/opentelemetry-operator-controller-manager -n opentelemetry-operator-system --timeout=300s
 
 # Undeploy controller in the current Kubernetes context, configured in ~/.kube/config
 .PHONY: undeploy
 undeploy: set-image-controller
 	$(KUSTOMIZE) build config/default | kubectl delete --ignore-not-found=$(ignore-not-found) -f -
+
+##@ Deploy without CRDs
+# Deploy controller in the current Kubernetes context, configured in ~/.kube/config
+.PHONY: deploy-no-crds
+deploy-no-crds: set-image-controller
+	$(KUSTOMIZE) build config/no-crds | INSTRUMENTATION_JAVA_IMG=$(INSTRUMENTATION_JAVA_IMG) envsubst | kubectl apply -f -
+	kubectl rollout status deployment/opentelemetry-operator-controller-manager -n opentelemetry-operator-system --timeout=300s
+
+# Undeploy controller in the current Kubernetes context, configured in ~/.kube/config
+.PHONY: undeploy-no-crds
+undeploy-no-crds: set-image-controller
+	$(KUSTOMIZE) build config/no-crds | kubectl delete --ignore-not-found=$(ignore-not-found) -f -
+
+##@ Standalone OpAMP Bridge (no operator / CRDs required)
+
+STANDALONE_BRIDGE_MANIFESTS ?= cmd/operator-opamp-bridge/manifests/standalone
+
+# Deploy the standalone OpAMP bridge into the current Kubernetes context.
+# Does not require the operator, CRDs, or cert-manager.
+.PHONY: deploy-standalone-bridge
+deploy-standalone-bridge: kustomize
+	cd $(STANDALONE_BRIDGE_MANIFESTS) && $(KUSTOMIZE) edit set image operator-opamp-bridge=${OPERATOROPAMPBRIDGE_IMG}
+	$(KUSTOMIZE) build $(STANDALONE_BRIDGE_MANIFESTS) | kubectl apply -f -
+	kubectl rollout status deployment/otel-opamp-bridge-standalone -n opentelemetry-opamp-bridge --timeout=120s
+
+# Undeploy the standalone OpAMP bridge from the current Kubernetes context.
+.PHONY: undeploy-standalone-bridge
+undeploy-standalone-bridge: kustomize
+	$(KUSTOMIZE) build $(STANDALONE_BRIDGE_MANIFESTS) | kubectl delete --ignore-not-found=true -f -
+
+# Build, load, and deploy the standalone bridge to a kind cluster.
+# Assumes a kind cluster is already running (use start-kind first).
+.PHONY: deploy-standalone-bridge-kind
+deploy-standalone-bridge-kind: load-image-operator-opamp-bridge deploy-standalone-bridge
 
 # Generates the released manifests
 .PHONY: release-artifacts
@@ -336,15 +399,35 @@ release-artifacts: set-image-controller
 	$(KUSTOMIZE) build config/overlays/openshift -o dist/opentelemetry-operator-openshift.yaml
 
 # Generate manifests e.g. CRD, RBAC etc.
+# apis/ is a nested Go module, which the "./..." pattern does not descend into, so
+# controller-gen only sees the CRD types as an imported dependency. Passing ./apis/...
+# explicitly loads them as source roots, keeping generation deterministic even when a
+# stray copy of the apis module exists on disk (e.g. a git worktree under .claude/),
+# which can otherwise shadow the types and silently drop fields from the CRDs.
 .PHONY: manifests
 manifests: controller-gen
-	$(CONTROLLER_GEN) $(CRD_OPTIONS) rbac:roleName=manager-role webhook paths="./..." output:crd:artifacts:config=${MANIFEST_DIR}
+	$(CONTROLLER_GEN) $(CRD_OPTIONS) rbac:roleName=manager-role webhook paths="./..." paths="./apis/..." output:crd:artifacts:config=${MANIFEST_DIR}
 
-# Run tests
-# setup-envtest uses KUBEBUILDER_ASSETS which points to a directory with binaries (api-server, etcd and kubectl)
+# Run tests, including the in-process target allocator integration tests (they need
+# no cluster or network, so they run unconditionally here).
 .PHONY: test
-test: envtest gotestsum
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(KUBE_VERSION) -p path)" $(GOTESTSUM) -- ${GOTEST_OPTS} ./...
+test: gotestsum
+	$(GOTESTSUM) -- ${GOTEST_OPTS} ${GOTEST_COVER_OPTS} ./...
+	$(MAKE) ta-integration-test
+
+# Regenerate the conformance goldens from raw Prometheus (promtool).
+# Run this after adding/changing fixtures or bumping the prometheus dependency.
+.PHONY: ta-conformance-regen
+ta-conformance-regen: promtool
+	PROMTOOL=$(PROMTOOL) go test -count=1 ./cmd/otel-allocator/internal/conformance/... -update
+
+# Run only the in-process target allocator + prometheus receiver integration tests.
+# They live in a separate Go module so the collector/receiver dependency graph stays
+# out of the target allocator binary, but they are in-process (no cluster/network) and
+# `make test` runs them too; this target is for iterating on them in isolation.
+.PHONY: ta-integration-test
+ta-integration-test: gotestsum
+	cd cmd/otel-allocator/integrationtest && $(GOTESTSUM) -- ${GOTEST_OPTS} ${GOTEST_COVER_INTEGRATION_OPTS} ./...
 
 # Run precommit checks (format, vet, lint, test, validation)
 .PHONY: precommit
@@ -367,10 +450,20 @@ vet:
 lint: golangci-lint
 	$(GOLANGCI_LINT) run
 
+# Run go mod tidy in every Go module in the repository
+.PHONY: tidy
+tidy:
+	@set -e; for dir in $(GO_MODULE_DIRS); do \
+		echo "go mod tidy: $$dir"; \
+		(cd $$dir && go mod tidy); \
+	done
+
 # Generate code
+# apis/ is a nested Go module; pass it explicitly so DeepCopy methods are regenerated
+# for the API types (the "./..." pattern does not descend into nested modules).
 .PHONY: generate
 generate: controller-gen
-	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
+	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..." paths="./apis/..."
 
 ##@ E2E
 # end-to-tests
@@ -382,6 +475,14 @@ e2e: chainsaw
 .PHONY: e2e-sidecar
 e2e-sidecar: chainsaw
 	$(CHAINSAW) test --test-dir ./tests/e2e-sidecar --report-name e2e-sidecar $(CHAINSAW_SELECTOR)
+
+# End-to-end tests for ClusterObservability. The CRD is not bundled, so install
+# it directly from config/crd/bases/. --parallel 1 because only the oldest
+# active ClusterObservability CR reconciles.
+.PHONY: e2e-clusterobservability
+e2e-clusterobservability: chainsaw
+	kubectl apply -f config/crd/bases/opentelemetry.io_clusterobservabilities.yaml
+	$(CHAINSAW) test --test-dir ./tests/e2e-clusterobservability --report-name e2e-clusterobservability --parallel 1
 
 # end-to-end-test for testing automatic RBAC creation
 .PHONY: e2e-automatic-rbac
@@ -403,11 +504,27 @@ e2e-instrumentation-default: e2e-instrumentation
 e2e-instrumentation: chainsaw
 	$(CHAINSAW) test --test-dir ./tests/e2e-instrumentation --report-name e2e-instrumentation
 
+# no-crds end-to-tests
+.PHONY: e2e-no-crds
+e2e-no-crds: chainsaw
+	$(CHAINSAW) test --test-dir ./tests/e2e-no-crds --report-name e2e-no-crds
+
 # Log operator pod information for debugging
 .PHONY: e2e-log-operator
 e2e-log-operator:
-	kubectl get pod -n opentelemetry-operator-system | grep "opentelemetry-operator" | awk '{print $$1}' | xargs -I {} kubectl logs -n opentelemetry-operator-system {} manager
+	# `-` prefix: a not-yet-started container has no logs, but that must not stop the
+	# describe/events below, which are exactly what explains why it has not started
+	# (e.g. an operator pod stuck in ContainerCreating during a deploy rollout timeout).
+	-kubectl get pod -n opentelemetry-operator-system | grep "opentelemetry-operator" | awk '{print $$1}' | xargs -I {} kubectl logs -n opentelemetry-operator-system {} manager
+	kubectl describe pod -n opentelemetry-operator-system -l app.kubernetes.io/name=opentelemetry-operator
+	kubectl get events -n opentelemetry-operator-system --sort-by=.lastTimestamp
 	kubectl get deploy -A
+
+# Fail if two chainsaw tests share a metadata.name (chainsaw renames collisions
+# to <name>#NN, which can't be traced back to a directory in JUnit/Codecov reports).
+.PHONY: check-chainsaw-test-names
+check-chainsaw-test-names:
+	./hack/check-chainsaw-test-names.sh
 
 # multi-instrumentation end-to-tests, alias to make matrix tests more convenient
 # the tests are the same, but the setup is different
@@ -422,7 +539,7 @@ e2e-multi-instrumentation: chainsaw
 # OpAMPBridge CR end-to-tests
 .PHONY: e2e-opampbridge
 e2e-opampbridge: chainsaw
-	$(CHAINSAW) test --test-dir ./tests/e2e-opampbridge --report-name e2e-opampbridge
+	OPERATOROPAMPBRIDGE_IMG=$(OPERATOROPAMPBRIDGE_IMG) $(CHAINSAW) test --test-dir ./tests/e2e-opampbridge --report-name e2e-opampbridge
 
 # end-to-end-test for testing pdb support
 .PHONY: e2e-pdb
@@ -463,21 +580,54 @@ e2e-metadata-filters: chainsaw
 	$(CHAINSAW) test --test-dir ./tests/e2e-metadata-filters --report-name e2e-metadata-filters
 
 # end-to-end-test for testing upgrading
+#
+# The tests in this group are run sequentially, as two ordered invocations, because
+# both manipulate the operator's lifecycle and must not run concurrently:
+#   1. upgrade-test boots on operator v0.86.0 (applied above) and its step-01 upgrades
+#      to the current build via `make deploy`.
+#   2. instrumentation-blocked-upgrade patches the operator's default-image args and
+#      restarts it; it requires the current operator, so it must run *after* upgrade-test
+#      has swapped it in.
 .PHONY: e2e-upgrade
 e2e-upgrade: undeploy chainsaw
 	kubectl apply -f ./tests/e2e-upgrade/upgrade-test/opentelemetry-operator-v0.86.0.yaml
 	go run hack/check-operator-ready.go
-	$(CHAINSAW) test --test-dir ./tests/e2e-upgrade --report-name e2e-upgrade
+	$(CHAINSAW) test --test-dir ./tests/e2e-upgrade/upgrade-test --report-name e2e-upgrade
+	$(CHAINSAW) test --test-dir ./tests/e2e-upgrade/instrumentation-blocked-upgrade --report-name e2e-instrumentation-blocked-upgrade
 
 # end-to-end tests to test crd validations
 .PHONY: e2e-crd-validations
 e2e-crd-validations: chainsaw
 	$(CHAINSAW) test --test-dir ./tests/e2e-crd-validations
 
+# Standalone Target Allocator end-to-end tests
+.PHONY: prepare-e2e-ta-standalone
+prepare-e2e-ta-standalone: kind kustomize gotestsum
+	$(MAKE) start-kind KUBE_VERSION=$(KUBE_VERSION)
+	$(MAKE) load-image-all install-targetallocator-prometheus-crds
+	@mkdir -p ./.testresults/e2e
+
+.PHONY: e2e-ta-standalone
+e2e-ta-standalone: kustomize gotestsum
+# Tests deploy TA and collector directly (not via the operator), so image refs are passed as env vars.
+	TARGETALLOCATOR_IMG=$(TARGETALLOCATOR_IMG) \
+	COLLECTOR_IMG=$(COLLECTOR_IMG) \
+	KUSTOMIZE=$(KUSTOMIZE) \
+	$(GOTESTSUM) --junitfile ./.testresults/e2e/e2e-ta-standalone.xml -- -tags e2e -count=1 -timeout 10m ./tests/e2e-ta-standalone/...
+
 # Prepare environment for e2e tests
 .PHONY: prepare-e2e
-prepare-e2e: chainsaw set-image-controller add-image-targetallocator add-image-opampbridge start-kind cert-manager install-metrics-server install-targetallocator-prometheus-crds load-image-all deploy
+prepare-e2e: chainsaw set-image-controller add-image-targetallocator add-image-opampbridge start-kind cert-manager install-metrics-server install-gateway-api-crds install-targetallocator-prometheus-crds load-image-all deploy
 	@mkdir -p ./.testresults/e2e
+
+.PHONY: prepare-e2e-no-crds
+prepare-e2e-no-crds: chainsaw set-image-controller add-image-targetallocator add-image-opampbridge start-kind cert-manager install-metrics-server install-targetallocator-prometheus-crds load-image-all deploy-no-crds
+	@mkdir -p ./.testresults/e2e
+
+.PHONY: prepare-e2e-clusterobservability
+prepare-e2e-clusterobservability: add-rbac-permissions-to-operator
+	@$(MAKE) add-operator-arg OPERATOR_ARG=--feature-gates=+operator.clusterobservability
+	@$(MAKE) prepare-e2e
 
 # Run operator-sdk scorecard tests for bundles
 .PHONY: scorecard-tests
@@ -576,7 +726,13 @@ container-instrumentation-all: container-instrumentation-java container-instrume
 .PHONY: start-kind
 start-kind: kind
 ifeq (true,$(START_KIND_CLUSTER))
-	$(KIND) create cluster --name $(KIND_CLUSTER_NAME) --config $(KIND_CONFIG) || true
+	# Tolerate a pre-existing cluster (idempotent local re-runs), but do NOT swallow a
+	# genuine creation failure with `|| true`.
+	@if $(KIND) get clusters 2>/dev/null | grep -qxF $(KIND_CLUSTER_NAME); then \
+		echo "kind cluster $(KIND_CLUSTER_NAME) already exists; skipping create"; \
+	else \
+		$(KIND) create cluster --name $(KIND_CLUSTER_NAME) --config $(KIND_CONFIG); \
+	fi
 endif
 
 # Stop kind cluster
@@ -590,6 +746,10 @@ endif
 .PHONY: install-metrics-server
 install-metrics-server:
 	./hack/install-metrics-server.sh
+
+.PHONY: install-gateway-api-crds
+install-gateway-api-crds:
+	./hack/install-gateway-api-crds.sh
 
 # This only installs the CRDs Target Allocator supports
 .PHONY: install-targetallocator-prometheus-crds
@@ -662,7 +822,8 @@ cmctl:
 		exit 0; \
 	fi ;\
 	TMP_DIR=$$(mktemp -d) ;\
-	curl -L -o $$TMP_DIR/cmctl.tar.gz https://github.com/jetstack/cert-manager/releases/download/v$(CERTMANAGER_VERSION)/cmctl-`go env GOOS`-`go env GOARCH`.tar.gz ;\
+	curl -fSL --retry 5 --retry-delay 2 --retry-all-errors -o $$TMP_DIR/cmctl.tar.gz https://github.com/jetstack/cert-manager/releases/download/v$(CERTMANAGER_VERSION)/cmctl-`go env GOOS`-`go env GOARCH`.tar.gz ;\
+	gzip -t $$TMP_DIR/cmctl.tar.gz || { echo "ERROR: downloaded cmctl archive is corrupt or incomplete" >&2; exit 1; } ;\
 	tar xzf $$TMP_DIR/cmctl.tar.gz -C $$TMP_DIR ;\
 	[ -d bin ] || mkdir bin ;\
 	mv $$TMP_DIR/cmctl $(CMCTL) ;\
@@ -672,28 +833,36 @@ cmctl:
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
 KIND ?= $(LOCALBIN)/kind
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
-ENVTEST ?= $(LOCALBIN)/setup-envtest
 CHLOGGEN ?= $(LOCALBIN)/chloggen
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 CHAINSAW ?= $(LOCALBIN)/chainsaw
 GOTESTSUM ?= $(LOCALBIN)/gotestsum
+GOVULNCHECK ?= $(LOCALBIN)/govulncheck
 
 # renovate: datasource=go depName=sigs.k8s.io/kustomize/kustomize/v5
-KUSTOMIZE_VERSION ?= v5.8.0
+KUSTOMIZE_VERSION ?= v5.8.1
 # renovate: datasource=go depName=sigs.k8s.io/controller-tools/cmd/controller-gen
-CONTROLLER_TOOLS_VERSION ?= v0.20.0
+CONTROLLER_TOOLS_VERSION ?= v0.21.0
 # renovate: datasource=github-releases depName=golangci/golangci-lint
-GOLANGCI_LINT_VERSION ?= v2.8.0
+GOLANGCI_LINT_VERSION ?= v2.12.2
 # renovate: datasource=go depName=sigs.k8s.io/kind
-KIND_VERSION ?= v0.31.0
+KIND_VERSION ?= v0.32.0
 # renovate: datasource=go depName=github.com/kyverno/chainsaw
-CHAINSAW_VERSION ?= v0.2.14
+CHAINSAW_VERSION ?= v0.2.15
 # renovate: datasource=go depName=gotest.tools/gotestsum
 GOTESTSUM_VERSION ?= v1.13.0
+# renovate: datasource=go depName=golang.org/x/vuln/cmd/govulncheck
+GOVULNCHECK_VERSION ?= v1.6.0
+PROMTOOL ?= $(LOCALBIN)/promtool
+# promtool is the golden source for the target-allocator conformance suite. It must match
+# the prometheus/prometheus library the operator links against, so derive the release version
+# straight from go.mod. The library is tagged v0.<major><minor>.<patch> (e.g. v0.312.0 ==
+# Prometheus 3.12.0), hence the awk arithmetic below.
+PROMTOOL_VERSION ?= $(shell awk '$$1=="github.com/prometheus/prometheus"{split($$2,v,".");printf "%d.%d.%d",int(v[2]/100),v[2]%100,v[3]}' go.mod)
 
 # Install all development tools
 .PHONY: install-tools
-install-tools: kustomize golangci-lint kind controller-gen envtest crdoc operator-sdk chainsaw gotestsum cmctl
+install-tools: kustomize golangci-lint kind controller-gen crdoc operator-sdk chainsaw gotestsum cmctl govulncheck
 
 # Download kustomize locally if necessary
 .PHONY: kustomize
@@ -715,12 +884,6 @@ kind: ## Download kind locally if necessary.
 controller-gen: ## Download controller-gen locally if necessary.
 	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen,$(CONTROLLER_TOOLS_VERSION))
 
-# Download envtest-setup locally if necessary
-.PHONY: envtest
-envtest: $(ENVTEST) ## Download envtest-setup locally if necessary.
-$(ENVTEST): $(LOCALBIN)
-	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,latest)
-
 CRDOC = $(shell pwd)/bin/crdoc
 # Download crdoc locally if necessary
 .PHONY: crdoc
@@ -737,13 +900,41 @@ chainsaw: ## Find or download chainsaw
 gotestsum: ## Find or download gotestsum
 	$(call go-install-tool,$(GOTESTSUM),gotest.tools/gotestsum,$(GOTESTSUM_VERSION))
 
+# Download govulncheck locally if necessary
+.PHONY: govulncheck
+govulncheck: ## Download govulncheck locally if necessary.
+	$(call go-install-tool,$(GOVULNCHECK),golang.org/x/vuln/cmd/govulncheck,$(GOVULNCHECK_VERSION))
+
+# Download promtool locally if necessary (conformance suite golden source; can't be go-installed
+# because prometheus/prometheus uses replace directives, so pull the release binary).
+.PHONY: promtool
+promtool: ## Download promtool locally if necessary.
+	@{ \
+	set -e ;\
+	if ($(PROMTOOL) --version 2>&1 | grep $(PROMTOOL_VERSION)) > /dev/null 2>&1 ; then \
+		exit 0; \
+	fi ;\
+	TMP_DIR=$$(mktemp -d) ;\
+	curl -fSL --retry 5 --retry-delay 2 --retry-all-errors -o $$TMP_DIR/prometheus.tar.gz https://github.com/prometheus/prometheus/releases/download/v$(PROMTOOL_VERSION)/prometheus-$(PROMTOOL_VERSION).`go env GOOS`-`go env GOARCH`.tar.gz ;\
+	gzip -t $$TMP_DIR/prometheus.tar.gz || { echo "ERROR: downloaded prometheus archive is corrupt or incomplete" >&2; exit 1; } ;\
+	tar xzf $$TMP_DIR/prometheus.tar.gz -C $$TMP_DIR --strip-components=1 --wildcards '*/promtool' ;\
+	[ -d $(LOCALBIN) ] || mkdir -p $(LOCALBIN) ;\
+	mv $$TMP_DIR/promtool $(PROMTOOL) ;\
+	rm -rf $$TMP_DIR ;\
+	}
+
+# Run govulncheck with the project's CVE exception list
+.PHONY: govulncheck-run
+govulncheck-run: govulncheck ## Run govulncheck, applying excepted CVEs from hack/govulncheck.sh.
+	GOVULNCHECK=$(GOVULNCHECK) ./hack/govulncheck.sh
+
 # go-install-tool will 'go install' any package $2 and install it to $1.
 PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
 define go-install-tool
 @set -e ; \
 BIN="$(1)"; PKG="$(2)"; VER="$(3)"; \
 DIR="$$(dirname "$$BIN")"; mkdir -p "$$DIR"; \
-if [ -x "$$BIN" ] && [ "$$VER" != "latest" ]; then \
+if [ -x "$$BIN" ] && [ "$$VER" != "latest" ] && echo "$$VER" | grep -q '^v'; then \
   CUR=$$(go version -m "$$BIN" 2>/dev/null | awk '$$1=="mod"{print $$3; exit}'); \
   if [ "$$CUR" = "$$VER" ]; then \
     exit 0; \
@@ -812,7 +1003,7 @@ reset: kustomize operator-sdk manifests
 	$(OPERATOR_SDK) bundle validate ./bundle/community
 	$(OPERATOR_SDK) bundle validate ./bundle/openshift
 	rm bundle.Dockerfile
-	git checkout config/manager/kustomization.yaml
+	git checkout config/manager/kustomization.yaml config/overlays/openshift/kustomization.yaml
 	./hack/ignore-createdAt-bundle.sh
 
 # Build the bundle image, used only for local dev purposes
@@ -840,7 +1031,11 @@ api-docs: crdoc kustomize
 	for crdmanifest in $$TMP_DIR/*; do \
 	  filename="$$(basename -s .opentelemetry.io.yaml $$crdmanifest)" ;\
 	  filename="$${filename#apiextensions.k8s.io_v1_customresourcedefinition_}" ;\
-	  $(CRDOC) --resources $$crdmanifest --output docs/api/$$filename.md ;\
+	  if [ "$$filename" = "clusterobservabilities" ]; then \
+	    echo "Skipping API documentation generation for clusterobservabilities (internal alpha API)" ;\
+	  else \
+	    $(CRDOC) --resources $$crdmanifest --output docs/api/$$filename.md ;\
+	  fi ;\
 	done;\
 	}
 
@@ -933,7 +1128,49 @@ catalog-build: opm bundle-build bundle-push ## Build a catalog image.
 catalog-push: ## Push a catalog image.
 	docker push $(CATALOG_IMG)
 
+##@ Supply Chain Security
+
+# Tool versions for supply chain securitya
+# renovate: datasource=github-releases depName=sigstore/cosign
+COSIGN_VERSION ?= v2.6.4
+COSIGN ?= $(LOCALBIN)/cosign
+UPLOAD ?= true
+
+
+# Download cosign locally if necessary
+.PHONY: cosign
+cosign: $(LOCALBIN)
+	@{ \
+	set -e ;\
+	if [ -x "$(COSIGN)" ] && "$(COSIGN)" version 2>/dev/null | grep -q "$(COSIGN_VERSION)"; then exit 0; fi ;\
+	OS=$(shell go env GOOS) && ARCH=$(shell go env GOARCH) ;\
+	curl -sSfL "https://github.com/sigstore/cosign/releases/download/$(COSIGN_VERSION)/cosign-$${OS}-$${ARCH}" -o "$(COSIGN)" ;\
+	chmod +x "$(COSIGN)" ;\
+	}
+
+# Sign container images with keyless cosign.
+# Usage: make cosign-sign IMAGE=ghcr.io/... DIGEST=sha256:...
+# Both IMAGE and DIGEST must be set.
+.PHONY: cosign-sign
+cosign-sign: cosign
+ifndef IMAGE
+	$(error IMAGE is not set. Usage: make cosign-sign IMAGE=<image> DIGEST=<digest>)
+endif
+ifndef DIGEST
+	$(error DIGEST is not set. Usage: make cosign-sign IMAGE=<image> DIGEST=<digest>)
+endif
+	$(COSIGN) sign --yes --upload=$(UPLOAD) "$(IMAGE)@$(DIGEST)"
+
 ##@ Release
+
+.PHONY: create-release-issue
+create-release-issue: ## Create a GitHub issue for the next release (use DRY_RUN=true to preview)
+ifeq ($(DRY_RUN),true)
+	hack/create-release-issue.sh $(if $(RELEASE_VERSION),--version $(RELEASE_VERSION)) --dry-run
+else
+	hack/create-release-issue.sh $(if $(RELEASE_VERSION),--version $(RELEASE_VERSION))
+endif
+
 # Create container image archive with all images
 container-image-archive: IMAGE_LIST_FILE = images-$(VERSION).txt
 container-image-archive: container container-target-allocator container-operator-opamp-bridge container-bridge-test-server container-instrumentation-all

@@ -7,6 +7,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/operator-framework/operator-lib/proxy"
 )
 
 func ApplyEnvVars(cfg *Config) {
@@ -77,6 +79,12 @@ func ApplyEnvVars(cfg *Config) {
 	if v, ok := os.LookupEnv("FIPS_DISABLED_COMPONENTS"); ok {
 		cfg.FipsDisabledComponents = v
 	}
+	if v, ok := os.LookupEnv("TLS_CLUSTER_PROFILE"); ok {
+		cfg.TLS.UseClusterProfile, _ = strconv.ParseBool(v)
+	}
+	if v, ok := os.LookupEnv("TLS_CONFIGURE_OPERANDS"); ok {
+		cfg.TLS.ConfigureOperands, _ = strconv.ParseBool(v)
+	}
 	if v, ok := os.LookupEnv("TLS_MIN_VERSION"); ok {
 		cfg.TLS.MinVersion = v
 	}
@@ -134,4 +142,13 @@ func ApplyEnvVars(cfg *Config) {
 	if v, ok := os.LookupEnv("ENABLE_MULTI_INSTRUMENTATION"); ok {
 		cfg.EnableMultiInstrumentation, _ = strconv.ParseBool(v)
 	}
+	if v, ok := os.LookupEnv("WATCH_NAMESPACE"); ok {
+		cfg.WatchNamespace = v
+	}
+	if v, ok := os.LookupEnv("OPENSHIFT_WEBHOOK_REPLICAS"); ok {
+		if i, err := strconv.ParseInt(v, 10, 32); err == nil {
+			cfg.OpenShiftWebhookReplicas = int32(i)
+		}
+	}
+	cfg.ProxyEnvVars = proxy.ReadProxyVarsFromEnv()
 }

@@ -8,7 +8,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	colfg "go.opentelemetry.io/collector/featuregate"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -20,7 +19,6 @@ import (
 	"github.com/open-telemetry/opentelemetry-operator/internal/config"
 	"github.com/open-telemetry/opentelemetry-operator/internal/naming"
 	"github.com/open-telemetry/opentelemetry-operator/pkg/constants"
-	"github.com/open-telemetry/opentelemetry-operator/pkg/featuregate"
 )
 
 var logger = logf.Log.WithName("unit-tests")
@@ -232,8 +230,6 @@ func TestContainerHasEnvVars(t *testing.T) {
 }
 
 func TestContainerHasProxyEnvVars(t *testing.T) {
-	t.Setenv("NO_PROXY", "localhost")
-
 	// prepare
 	targetAllocator := v1alpha1.TargetAllocator{
 		Spec: v1alpha1.TargetAllocatorSpec{
@@ -249,6 +245,10 @@ func TestContainerHasProxyEnvVars(t *testing.T) {
 	}
 	cfg := config.Config{
 		TargetAllocatorImage: "default-image",
+		ProxyEnvVars: []corev1.EnvVar{
+			{Name: "NO_PROXY", Value: "localhost"},
+			{Name: "no_proxy", Value: "localhost"},
+		},
 	}
 
 	// test
@@ -354,6 +354,7 @@ func TestContainerDoesNotOverrideEnvVars(t *testing.T) {
 	// verify
 	assert.Equal(t, expected, c)
 }
+
 func TestReadinessProbe(t *testing.T) {
 	targetAllocator := v1alpha1.TargetAllocator{}
 	cfg := config.New()
@@ -372,6 +373,7 @@ func TestReadinessProbe(t *testing.T) {
 	// verify
 	assert.Equal(t, expected, c.ReadinessProbe)
 }
+
 func TestLivenessProbe(t *testing.T) {
 	// prepare
 	targetAllocator := v1alpha1.TargetAllocator{}
@@ -390,6 +392,58 @@ func TestLivenessProbe(t *testing.T) {
 
 	// verify
 	assert.Equal(t, expected, c.LivenessProbe)
+}
+
+func TestCustomReadinessProbe(t *testing.T) {
+	// prepare
+	customProbe := &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path: "/custom-ready",
+				Port: intstr.FromInt(9090),
+			},
+		},
+		InitialDelaySeconds: 10,
+		PeriodSeconds:       5,
+	}
+	targetAllocator := v1alpha1.TargetAllocator{
+		Spec: v1alpha1.TargetAllocatorSpec{
+			ReadinessProbe: customProbe,
+		},
+	}
+	cfg := config.New()
+
+	// test
+	c := Container(cfg, logger, targetAllocator)
+
+	// verify
+	assert.Equal(t, customProbe, c.ReadinessProbe)
+}
+
+func TestCustomLivenessProbe(t *testing.T) {
+	// prepare
+	customProbe := &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path: "/custom-live",
+				Port: intstr.FromInt(9090),
+			},
+		},
+		InitialDelaySeconds: 15,
+		PeriodSeconds:       10,
+	}
+	targetAllocator := v1alpha1.TargetAllocator{
+		Spec: v1alpha1.TargetAllocatorSpec{
+			LivenessProbe: customProbe,
+		},
+	}
+	cfg := config.New()
+
+	// test
+	c := Container(cfg, logger, targetAllocator)
+
+	// verify
+	assert.Equal(t, customProbe, c.LivenessProbe)
 }
 
 func TestSecurityContext(t *testing.T) {
@@ -438,11 +492,11 @@ func TestArgs(t *testing.T) {
 
 func TestContainerWithCertManagerAvailable(t *testing.T) {
 	// prepare
-	targetAllocator := v1alpha1.TargetAllocator{}
-
-	flgs := featuregate.Flags(colfg.GlobalRegistry())
-	err := flgs.Parse([]string{"--feature-gates=operator.targetallocator.mtls"})
-	require.NoError(t, err)
+	targetAllocator := v1alpha1.TargetAllocator{
+		Spec: v1alpha1.TargetAllocatorSpec{
+			Mtls: &v1beta1.TargetAllocatorMTLS{Enabled: true},
+		},
+	}
 
 	cfg := config.Config{
 		CertManagerAvailability: certmanager.Available,
@@ -554,7 +608,7 @@ func TestContainerLifecycle(t *testing.T) {
 }
 
 func TestContainerEnvFrom(t *testing.T) {
-	//prepare
+	// prepare
 	envFrom1 := corev1.EnvFromSource{
 		SecretRef: &corev1.SecretEnvSource{
 			LocalObjectReference: corev1.LocalObjectReference{
@@ -588,6 +642,33 @@ func TestContainerEnvFrom(t *testing.T) {
 	// verify
 	assert.Contains(t, c.EnvFrom, envFrom1)
 	assert.Contains(t, c.EnvFrom, envFrom2)
+}
+
+// Regression test: when Spec.Env has spare backing-array capacity,
+// the container's Env must not share the underlying array with the spec.
+func TestContainerEnvAliasing(t *testing.T) {
+	env := make([]corev1.EnvVar, 0, 10)
+	env = append(env, corev1.EnvVar{Name: "USER_VAR", Value: "val"})
+
+	targetAllocator := v1alpha1.TargetAllocator{
+		Spec: v1alpha1.TargetAllocatorSpec{
+			OpenTelemetryCommonFields: v1beta1.OpenTelemetryCommonFields{
+				Env: env,
+			},
+		},
+	}
+	cfg := config.New()
+
+	c := Container(cfg, logger, targetAllocator)
+
+	// Mutate the original spec — container must not be affected.
+	targetAllocator.Spec.Env = append(targetAllocator.Spec.Env,
+		corev1.EnvVar{Name: "intruder", Value: "bad"})
+
+	for _, e := range c.Env {
+		assert.NotEqual(t, "intruder", e.Name,
+			"container Env shares backing array with spec")
+	}
 }
 
 func TestContainerImagePullPolicy(t *testing.T) {

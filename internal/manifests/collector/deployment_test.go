@@ -92,10 +92,11 @@ func TestDeploymentNewDefault(t *testing.T) {
 
 	// verify sha256 podAnnotation
 	expectedAnnotations := map[string]string{
-		"opentelemetry-operator-config/sha256": "fbcdae6a02b2115cd5ca4f34298202ab041d1dfe62edebfaadb48b1ee178231d",
-		"prometheus.io/path":                   "/metrics",
-		"prometheus.io/port":                   "8888",
-		"prometheus.io/scrape":                 "true",
+		"opentelemetry-operator-config/sha256":                   "fbcdae6a02b2115cd5ca4f34298202ab041d1dfe62edebfaadb48b1ee178231d",
+		"prometheus.io/path":                                     "/metrics",
+		"prometheus.io/port":                                     "8888",
+		"prometheus.io/scrape":                                   "true",
+		"operator.opentelemetry.io/prometheus-annotations-added": "true",
 	}
 	assert.Equal(t, expectedAnnotations, d.Spec.Template.Annotations)
 
@@ -157,10 +158,11 @@ func TestDeploymentPodAnnotations(t *testing.T) {
 		"prometheus.io/path":                   "/metrics",
 		"prometheus.io/port":                   "8888",
 		"prometheus.io/scrape":                 "true",
+		"operator.opentelemetry.io/prometheus-annotations-added": "true",
 	}
 
 	// verify
-	assert.Len(t, d.Spec.Template.Annotations, 5)
+	assert.Len(t, d.Spec.Template.Annotations, 6)
 	assert.Equal(t, "my-instance-collector", d.Name)
 	assert.Equal(t, expectedPodAnnotationValues, d.Spec.Template.Annotations)
 }
@@ -281,6 +283,119 @@ func TestDeploymentHostNetwork(t *testing.T) {
 	assert.Equal(t, d2.Spec.Template.Spec.DNSPolicy, v1.DNSClusterFirstWithHostNet)
 }
 
+func TestDeploymentHostUsers(t *testing.T) {
+	// Test default (unset)
+	otelcol1 := v1beta1.OpenTelemetryCollector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "my-instance",
+		},
+	}
+
+	cfg := config.New()
+
+	params1 := manifests.Params{
+		Config:  cfg,
+		OtelCol: otelcol1,
+		Log:     testLogger,
+	}
+
+	d1, err := Deployment(params1)
+	require.NoError(t, err)
+	assert.Nil(t, d1.Spec.Template.Spec.HostUsers)
+
+	// Test hostUsers=true
+	hostUsersTrue := true
+	otelcol2 := v1beta1.OpenTelemetryCollector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "my-instance-hostusers-true",
+		},
+		Spec: v1beta1.OpenTelemetryCollectorSpec{
+			OpenTelemetryCommonFields: v1beta1.OpenTelemetryCommonFields{
+				HostUsers: &hostUsersTrue,
+			},
+		},
+	}
+
+	params2 := manifests.Params{
+		Config:  cfg,
+		OtelCol: otelcol2,
+		Log:     testLogger,
+	}
+
+	d2, err := Deployment(params2)
+	require.NoError(t, err)
+	require.NotNil(t, d2.Spec.Template.Spec.HostUsers)
+	assert.True(t, *d2.Spec.Template.Spec.HostUsers)
+
+	// Test hostUsers=false
+	hostUsersFalse := false
+	otelcol3 := v1beta1.OpenTelemetryCollector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "my-instance-hostusers-false",
+		},
+		Spec: v1beta1.OpenTelemetryCollectorSpec{
+			OpenTelemetryCommonFields: v1beta1.OpenTelemetryCommonFields{
+				HostUsers: &hostUsersFalse,
+			},
+		},
+	}
+
+	params3 := manifests.Params{
+		Config:  cfg,
+		OtelCol: otelcol3,
+		Log:     testLogger,
+	}
+
+	d3, err := Deployment(params3)
+	require.NoError(t, err)
+	require.NotNil(t, d3.Spec.Template.Spec.HostUsers)
+	assert.False(t, *d3.Spec.Template.Spec.HostUsers)
+}
+
+func TestDeploymentHostAliases(t *testing.T) {
+	// Test default (unset)
+	otelcol1 := v1beta1.OpenTelemetryCollector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "my-instance",
+		},
+	}
+
+	cfg := config.New()
+
+	params1 := manifests.Params{
+		Config:  cfg,
+		OtelCol: otelcol1,
+		Log:     testLogger,
+	}
+
+	d1, err := Deployment(params1)
+	require.NoError(t, err)
+	assert.Empty(t, d1.Spec.Template.Spec.HostAliases)
+
+	// Test hostAliases set
+	aliases := []v1.HostAlias{{IP: "1.2.3.4", Hostnames: []string{"host.local"}}}
+	otelcol2 := v1beta1.OpenTelemetryCollector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "my-instance-hostaliases",
+		},
+		Spec: v1beta1.OpenTelemetryCollectorSpec{
+			OpenTelemetryCommonFields: v1beta1.OpenTelemetryCommonFields{
+				HostAliases: aliases,
+			},
+		},
+	}
+
+	params2 := manifests.Params{
+		Config:  cfg,
+		OtelCol: otelcol2,
+		Log:     testLogger,
+	}
+
+	d2, err := Deployment(params2)
+	require.NoError(t, err)
+	assert.Equal(t, aliases, d2.Spec.Template.Spec.HostAliases)
+}
+
 func TestDeploymentDNSPolicy(t *testing.T) {
 	otelcol1 := v1beta1.OpenTelemetryCollector{
 		ObjectMeta: metav1.ObjectMeta{
@@ -349,9 +464,9 @@ func TestDeploymentFilterLabels(t *testing.T) {
 	d, err := Deployment(params)
 	require.NoError(t, err)
 
-	assert.Len(t, d.ObjectMeta.Labels, 6)
+	assert.Len(t, d.Labels, 6)
 	for k := range excludedLabels {
-		assert.NotContains(t, d.ObjectMeta.Labels, k)
+		assert.NotContains(t, d.Labels, k)
 	}
 }
 
@@ -382,9 +497,9 @@ func TestDeploymentFilterAnnotations(t *testing.T) {
 	d, err := Deployment(params)
 	require.NoError(t, err)
 
-	assert.Len(t, d.ObjectMeta.Annotations, 0)
+	assert.Len(t, d.Annotations, 0)
 	for k := range excludedAnnotations {
-		assert.NotContains(t, d.ObjectMeta.Annotations, k)
+		assert.NotContains(t, d.Annotations, k)
 	}
 }
 
@@ -780,71 +895,71 @@ func TestGetDesiredReplicas(t *testing.T) {
 			otelCol: v1beta1.OpenTelemetryCollector{
 				Spec: v1beta1.OpenTelemetryCollectorSpec{
 					OpenTelemetryCommonFields: v1beta1.OpenTelemetryCommonFields{
-						Replicas: int32Ptr(5),
+						Replicas: new(int32(5)),
 					},
 				},
 			},
-			expected: int32Ptr(5),
+			expected: new(int32(5)),
 		},
 		{
 			name: "autoscaler-without-minReplicas-spec-replicas",
 			otelCol: v1beta1.OpenTelemetryCollector{
 				Spec: v1beta1.OpenTelemetryCollectorSpec{
 					OpenTelemetryCommonFields: v1beta1.OpenTelemetryCommonFields{
-						Replicas: int32Ptr(3),
+						Replicas: new(int32(3)),
 					},
 					Autoscaler: &v1beta1.AutoscalerSpec{
-						MaxReplicas: int32Ptr(10),
+						MaxReplicas: new(int32(10)),
 						// MinReplicas is nil
 					},
 				},
 			},
-			expected: int32Ptr(3),
+			expected: new(int32(3)),
 		},
 		{
 			name: "autoscaler-with-minReplicas",
 			otelCol: v1beta1.OpenTelemetryCollector{
 				Spec: v1beta1.OpenTelemetryCollectorSpec{
 					OpenTelemetryCommonFields: v1beta1.OpenTelemetryCommonFields{
-						Replicas: int32Ptr(2),
+						Replicas: new(int32(2)),
 					},
 					Autoscaler: &v1beta1.AutoscalerSpec{
-						MinReplicas: int32Ptr(4),
-						MaxReplicas: int32Ptr(10),
+						MinReplicas: new(int32(4)),
+						MaxReplicas: new(int32(10)),
 					},
 				},
 			},
-			expected: int32Ptr(4),
+			expected: new(int32(4)),
 		},
 		{
 			name: "autoscaler-with-minReplicas-diff-spec-replicas",
 			otelCol: v1beta1.OpenTelemetryCollector{
 				Spec: v1beta1.OpenTelemetryCollectorSpec{
 					OpenTelemetryCommonFields: v1beta1.OpenTelemetryCommonFields{
-						Replicas: int32Ptr(1),
+						Replicas: new(int32(1)),
 					},
 					Autoscaler: &v1beta1.AutoscalerSpec{
-						MinReplicas: int32Ptr(6),
-						MaxReplicas: int32Ptr(20),
+						MinReplicas: new(int32(6)),
+						MaxReplicas: new(int32(20)),
 					},
 				},
 			},
-			expected: int32Ptr(6),
+			expected: new(int32(6)),
 		},
 		{
 			name: "autoscaler-with-minReplicas-spec-replicas-greater",
 			otelCol: v1beta1.OpenTelemetryCollector{
 				Spec: v1beta1.OpenTelemetryCollectorSpec{
 					OpenTelemetryCommonFields: v1beta1.OpenTelemetryCommonFields{
-						Replicas: int32Ptr(5),
+						Replicas: new(int32(5)),
 					},
 					Autoscaler: &v1beta1.AutoscalerSpec{
-						MinReplicas: int32Ptr(3),
-						MaxReplicas: int32Ptr(10),
+						MinReplicas: new(int32(3)),
+						MaxReplicas: new(int32(10)),
 					},
 				},
 			},
-			expected: int32Ptr(5),
+			expected: new(int32(5)),
 		},
 	}
 
@@ -861,12 +976,7 @@ func TestGetDesiredReplicas(t *testing.T) {
 	}
 }
 
-func int32Ptr(i int32) *int32 {
-	return &i
-}
-
 func TestDeploymentHostPIDCanBeSet(t *testing.T) {
-
 	// Test default
 	otelcol1 := v1beta1.OpenTelemetryCollector{
 		ObjectMeta: metav1.ObjectMeta{

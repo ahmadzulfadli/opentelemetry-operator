@@ -5,7 +5,8 @@ package instrumentation
 
 import (
 	"fmt"
-	"sort"
+	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -64,21 +65,23 @@ func injectApacheHttpdagent(_ logr.Logger, apacheSpec v1alpha1.ApacheHttpd, pod 
 				EmptyDir: &corev1.EmptyDirVolumeSource{
 					SizeLimit: volumeSize(apacheSpec.VolumeSizeLimit),
 				},
-			}})
+			},
+		})
 
 		apacheConfDir := getApacheConfDir(apacheSpec.ConfigPath)
 
+		// don't use filepath.Join here because we want to keep the dot at the end
+		apacheConfDirDestinationPath := apacheConfDir + string(filepath.Separator) + "."
 		cloneContainer := corev1.Container{
 			Name:    apacheAgentCloneContainerName,
 			Image:   container.Image,
-			Command: []string{"/bin/sh", "-c"},
-			Args:    []string{"cp -r " + apacheConfDir + "/* " + apacheAgentConfDirFull},
+			Command: []string{"cp", "-r", apacheConfDirDestinationPath, apacheAgentConfDirFull},
 			Env:     container.Env,
 			EnvFrom: container.EnvFrom,
-			VolumeMounts: append(container.VolumeMounts, corev1.VolumeMount{
+			VolumeMounts: slices.Concat(container.VolumeMounts, []corev1.VolumeMount{{
 				Name:      apacheAgentConfigVolume,
 				MountPath: apacheAgentConfDirFull,
-			}),
+			}}),
 			Resources:       apacheSpec.Resources,
 			SecurityContext: container.SecurityContext,
 			ImagePullPolicy: container.ImagePullPolicy,
@@ -122,24 +125,16 @@ func injectApacheHttpdagent(_ logr.Logger, apacheSpec v1alpha1.ApacheHttpd, pod 
 			Name:    apacheAgentInitContainerName,
 			Image:   apacheSpec.Image,
 			Command: []string{"/bin/sh", "-c"},
-			Args: []string{
-				// Copy agent binaries to shared volume
-				"cp -r /opt/opentelemetry/* " + apacheAgentDirFull + " && " +
-					// setup logging configuration from template
-					"export agentLogDir=$(echo \"" + apacheAgentDirFull + "/logs\" | sed 's,/,\\\\/,g') && " +
-					"cat " + apacheAgentDirFull + "/conf/opentelemetry_sdk_log4cxx.xml.template | sed 's/__agent_log_dir__/'${agentLogDir}'/g'  > " + apacheAgentDirFull + "/conf/opentelemetry_sdk_log4cxx.xml &&" +
-					// Create agent configuration file by pasting content of env var to a file
-					"echo \"$" + apacheAttributesEnvVar + "\" > " + apacheAgentConfDirFull + "/" + apacheAgentConfigFile + " && " +
-					"sed -i 's/" + apacheServiceInstanceId + "/'${" + apacheServiceInstanceIdEnvVar + "}'/g' " + apacheAgentConfDirFull + "/" + apacheAgentConfigFile + " && " +
-					// Include a link to include Apache agent configuration file into httpd.conf
-					"echo -e '\nInclude " + getApacheConfDir(apacheSpec.ConfigPath) + "/" + apacheAgentConfigFile + "' >> " + apacheAgentConfDirFull + "/" + apacheConfigFile,
-			},
+			// User-controlled value is passed as a positional arg (read as $1
+			// in the script) so it is never parsed by the shell.
+			Args: []string{apacheHttpdAgentScript, "--", getApacheConfDir(apacheSpec.ConfigPath)},
 			Env: []corev1.EnvVar{
 				{
 					Name:  apacheAttributesEnvVar,
 					Value: getApacheOtelConfig(pod, useLabelsForResourceAttributes, apacheSpec, container, otlpEndpoint, resourceMap),
 				},
-				{Name: apacheServiceInstanceIdEnvVar,
+				{
+					Name: apacheServiceInstanceIdEnvVar,
 					ValueFrom: &corev1.EnvVarSource{
 						FieldRef: &corev1.ObjectFieldSelector{
 							FieldPath: "metadata.name",
@@ -200,12 +195,11 @@ LoadModule otel_apache_module %[1]s/WebServerModule/Apache/libmod_apache_otel%[2
 	}
 	serviceName := chooseServiceName(pod, useLabelsForResourceAttributes, resourceMap, container)
 	serviceNamespace := pod.GetNamespace()
-	if len(serviceNamespace) == 0 {
+	if serviceNamespace == "" {
 		serviceNamespace = resourceMap[string(semconv.K8SNamespaceNameKey)]
-		if len(serviceNamespace) == 0 {
+		if serviceNamespace == "" {
 			serviceNamespace = "apache-httpd"
 		}
-
 	}
 	// Namespace name override TBD
 
@@ -234,7 +228,8 @@ LoadModule otel_apache_module %[1]s/WebServerModule/Apache/libmod_apache_otel%[2
 		attrMap[attr.Name] = attr.Value
 	}
 
-	configFileContent := fmt.Sprintf(template,
+	var configFileContent strings.Builder
+	fmt.Fprintf(&configFileContent, template,
 		apacheAgentDirectory+apacheAgentSubDirectory,
 		versionSuffix)
 
@@ -242,13 +237,13 @@ LoadModule otel_apache_module %[1]s/WebServerModule/Apache/libmod_apache_otel%[2
 	for key := range attrMap {
 		keys = append(keys, key)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 
 	for _, key := range keys {
-		configFileContent += fmt.Sprintf("%s %s\n", key, attrMap[key])
+		fmt.Fprintf(&configFileContent, "%s %s\n", key, attrMap[key])
 	}
 
-	return configFileContent
+	return configFileContent.String()
 }
 
 func getApacheConfDir(configuredDir string) string {

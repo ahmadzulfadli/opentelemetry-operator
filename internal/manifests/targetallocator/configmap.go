@@ -12,7 +12,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/open-telemetry/opentelemetry-operator/apis/v1beta1"
-	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/certmanager"
 	"github.com/open-telemetry/opentelemetry-operator/internal/manifests/collector"
 	"github.com/open-telemetry/opentelemetry-operator/internal/manifests/manifestutils"
 	"github.com/open-telemetry/opentelemetry-operator/internal/manifests/targetallocator/adapters"
@@ -31,9 +30,9 @@ func ConfigMap(params Params) (*corev1.ConfigMap, error) {
 	labels := manifestutils.Labels(instance.ObjectMeta, name, params.TargetAllocator.Spec.Image, ComponentOpenTelemetryTargetAllocator, nil)
 	taSpec := instance.Spec
 
-	taConfig := make(map[interface{}]interface{})
+	taConfig := make(map[any]any)
 	// Set config if global or scrape configs set
-	config := map[string]interface{}{}
+	config := map[string]any{}
 	var (
 		globalConfig      map[string]any
 		scrapeConfigs     []v1beta1.AnyConfig
@@ -87,11 +86,17 @@ func ConfigMap(params Params) (*corev1.ConfigMap, error) {
 	taConfig["filter_strategy"] = taSpec.FilterStrategy
 
 	if taSpec.PrometheusCR.Enabled {
-		prometheusCRConfig := map[interface{}]interface{}{
+		prometheusCRConfig := map[any]any{
 			"enabled": true,
 		}
 		if taSpec.PrometheusCR.ScrapeInterval.Size() > 0 {
 			prometheusCRConfig["scrape_interval"] = taSpec.PrometheusCR.ScrapeInterval.Duration
+		}
+		if taSpec.PrometheusCR.EvaluationInterval.Size() > 0 {
+			prometheusCRConfig["evaluation_interval"] = taSpec.PrometheusCR.EvaluationInterval.Duration
+		}
+		if taSpec.PrometheusCR.ScrapeProtocols != nil {
+			prometheusCRConfig["scrape_protocols"] = taSpec.PrometheusCR.ScrapeProtocols
 		}
 
 		if taSpec.PrometheusCR.ScrapeClasses != nil {
@@ -106,25 +111,41 @@ func ConfigMap(params Params) (*corev1.ConfigMap, error) {
 			prometheusCRConfig["deny_namespaces"] = taSpec.PrometheusCR.DenyNamespaces
 		}
 
+		if taSpec.PrometheusCR.SecretNamespaces != nil {
+			prometheusCRConfig["secret_namespaces"] = taSpec.PrometheusCR.SecretNamespaces
+		}
+
+		if taSpec.PrometheusCR.DenyFSAccessThroughSMs {
+			prometheusCRConfig["deny_fs_access_through_sms"] = true
+		}
+
+		prometheusCRConfig["service_monitor_namespace_selector"] = taSpec.PrometheusCR.ServiceMonitorNamespaceSelector
 		prometheusCRConfig["service_monitor_selector"] = taSpec.PrometheusCR.ServiceMonitorSelector
 
+		prometheusCRConfig["pod_monitor_namespace_selector"] = taSpec.PrometheusCR.PodMonitorNamespaceSelector
 		prometheusCRConfig["pod_monitor_selector"] = taSpec.PrometheusCR.PodMonitorSelector
 
+		prometheusCRConfig["scrape_config_namespace_selector"] = taSpec.PrometheusCR.ScrapeConfigNamespaceSelector
 		prometheusCRConfig["scrape_config_selector"] = taSpec.PrometheusCR.ScrapeConfigSelector
 
+		prometheusCRConfig["probe_namespace_selector"] = taSpec.PrometheusCR.ProbeNamespaceSelector
 		prometheusCRConfig["probe_selector"] = taSpec.PrometheusCR.ProbeSelector
 
 		taConfig["prometheus_cr"] = prometheusCRConfig
 	}
 
-	if params.Config.CertManagerAvailability == certmanager.Available && featuregate.EnableTargetAllocatorMTLS.IsEnabled() {
-		taConfig["https"] = map[string]interface{}{
+	if manifestutils.IsTAMTLSEnabled(&params.TargetAllocator) {
+		taConfig["https"] = map[string]any{
 			"enabled":            true,
 			"listen_addr":        ":8443",
 			"ca_file_path":       filepath.Join(constants.TACollectorTLSDirPath, constants.TACollectorCAFileName),
 			"tls_cert_file_path": filepath.Join(constants.TACollectorTLSDirPath, constants.TACollectorTLSCertFileName),
 			"tls_key_file_path":  filepath.Join(constants.TACollectorTLSDirPath, constants.TACollectorTLSKeyFileName),
 		}
+	}
+
+	if taSpec.AllowInsecureAuthSecrets {
+		taConfig["allow_insecure_auth_secrets"] = true
 	}
 
 	if taSpec.CollectorNotReadyGracePeriod.Size() > 0 {
@@ -188,7 +209,7 @@ func getGlobalConfigFromOtelConfig(otelConfig v1beta1.Config) (v1beta1.AnyConfig
 	type promReceiverConfig struct {
 		Prometheus struct {
 			Config struct {
-				Global map[string]interface{} `mapstructure:"global"`
+				Global map[string]any `mapstructure:"global"`
 			} `mapstructure:"config"`
 		} `mapstructure:"prometheus"`
 	}
@@ -204,6 +225,13 @@ func getGlobalConfigFromOtelConfig(otelConfig v1beta1.Config) (v1beta1.AnyConfig
 func getScrapeConfigsFromOtelConfig(otelcolConfig string) ([]v1beta1.AnyConfig, error) {
 	// Collector supports environment variable substitution, but the TA does not.
 	// TA Scrape Configs should have a single "$", as it does not support env var substitution
+	promConfig, err := adapters.ConfigToPromConfig(otelcolConfig)
+	if err != nil {
+		return nil, err
+	}
+	if _, hasConfig := promConfig["config"]; !hasConfig {
+		return []v1beta1.AnyConfig{}, nil
+	}
 	prometheusReceiverConfig, err := adapters.UnescapeDollarSignsInPromConfig(otelcolConfig)
 	if err != nil {
 		return nil, err

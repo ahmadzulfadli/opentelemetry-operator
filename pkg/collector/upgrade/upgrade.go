@@ -11,17 +11,18 @@ import (
 	semver "github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/open-telemetry/opentelemetry-operator/apis/v1alpha1"
 	"github.com/open-telemetry/opentelemetry-operator/apis/v1beta1"
 	"github.com/open-telemetry/opentelemetry-operator/internal/version"
+	"github.com/open-telemetry/opentelemetry-operator/internal/webhook"
 )
 
 type VersionUpgrade struct {
 	Client   client.Client
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 	Version  version.Version
 	Log      logr.Logger
 }
@@ -29,14 +30,14 @@ type VersionUpgrade struct {
 const RecordBufferSize int = 100
 
 func (u VersionUpgrade) semVer() *semver.Version {
-	if len(u.Version.OpenTelemetryCollector) == 0 {
+	if u.Version.OpenTelemetryCollector == "" {
 		return &Latest.Version
 	}
-	if v, err := semver.NewVersion(u.Version.OpenTelemetryCollector); err != nil {
+	v, err := semver.NewVersion(u.Version.OpenTelemetryCollector)
+	if err != nil {
 		return &Latest.Version
-	} else {
-		return v
 	}
+	return v
 }
 
 // NeedsUpgrade checks if this CR needs to be upgraded.
@@ -60,7 +61,7 @@ func (u VersionUpgrade) Upgrade(ctx context.Context, original v1beta1.OpenTeleme
 	if err != nil {
 		const msg = "automated update not possible. Configuration must be corrected manually and CR instance must be re-created."
 		itemLogger.Info(msg)
-		u.Recorder.Event(&original, corev1.EventTypeWarning, "Upgrade", msg)
+		u.Recorder.Eventf(&original, nil, corev1.EventTypeWarning, "Upgrade", "Upgrade", msg)
 		return err
 	}
 	if !reflect.DeepEqual(upgraded, original) {
@@ -125,7 +126,7 @@ func (u VersionUpgrade) ManagedInstance(_ context.Context, otelcol v1beta1.OpenT
 		if available.GreaterThan(instanceV) {
 			if available.upgrade != nil {
 				otelcolV1alpha1 := &v1alpha1.OpenTelemetryCollector{}
-				if err := otelcolV1alpha1.ConvertFrom(&updated); err != nil {
+				if err := webhook.OtelColConvertFrom(otelcolV1alpha1, &updated); err != nil {
 					return updated, err
 				}
 
@@ -136,13 +137,12 @@ func (u VersionUpgrade) ManagedInstance(_ context.Context, otelcol v1beta1.OpenT
 				}
 				upgradedV1alpha1.Status.Version = available.String()
 
-				if err := upgradedV1alpha1.ConvertTo(&updated); err != nil {
+				if err := webhook.OtelColConvertTo(upgradedV1alpha1, &updated); err != nil {
 					return updated, err
 				}
 				u.Log.V(1).Info("step upgrade", "name", updated.Name, "namespace", updated.Namespace, "version", available.String())
 			} else {
-
-				upgraded, err := available.upgradeV1beta1(u, &updated) //available.upgrade(params., &updated)
+				upgraded, err := available.upgradeV1beta1(u, &updated) // available.upgrade(params., &updated)
 				if err != nil {
 					u.Log.Error(err, "failed to upgrade managed otelcol instance", "name", updated.Name, "namespace", updated.Namespace)
 					return updated, err

@@ -22,6 +22,7 @@ type Config struct {
 	OperatorNamespace   string
 	KubernetesClient    client.Client
 	KubernetesClientSet *kubernetes.Clientset
+	Scheme              *runtime.Scheme
 }
 
 func NewConfig(scheme *runtime.Scheme) (Config, error) {
@@ -29,7 +30,7 @@ func NewConfig(scheme *runtime.Scheme) (Config, error) {
 
 	pflag.StringVar(&operatorName, "operator-name", "opentelemetry-operator", "Operator name")
 	pflag.StringVar(&operatorNamespace, "operator-namespace", "", "Namespace where the operator was deployed")
-	pflag.StringVar(&collectionDir, "collection-dir", filepath.Join(homedir.HomeDir(), "/must-gather"), "Absolute path to the KubeconfigPath file")
+	pflag.StringVar(&collectionDir, "collection-dir", "/must-gather", "Absolute path to the collection directory")
 	pflag.StringVar(&kubeconfigPath, "kubeconfig", "", "Path to the kubeconfig file")
 	pflag.Parse()
 
@@ -46,12 +47,12 @@ func NewConfig(scheme *runtime.Scheme) (Config, error) {
 
 	clusterClient, err := client.New(config, client.Options{Scheme: scheme})
 	if err != nil {
-		return Config{}, fmt.Errorf("creating the Kubernetes client: %w\n", err)
+		return Config{}, fmt.Errorf("creating the Kubernetes client: %w", err)
 	}
 
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return Config{}, fmt.Errorf("creating the Kubernetes clienset: %w\n", err)
+		return Config{}, fmt.Errorf("creating the Kubernetes clientset: %w", err)
 	}
 
 	return Config{
@@ -60,5 +61,6 @@ func NewConfig(scheme *runtime.Scheme) (Config, error) {
 		KubernetesClientSet: clientset,
 		OperatorName:        operatorName,
 		OperatorNamespace:   operatorNamespace,
+		Scheme:              scheme,
 	}, nil
 }

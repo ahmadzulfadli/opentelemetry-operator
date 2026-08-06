@@ -5,14 +5,11 @@ package controllers_test
 
 import (
 	"context"
-	"crypto/tls"
+	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
-	"time"
 
 	routev1 "github.com/openshift/api/route/v1"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
@@ -21,26 +18,23 @@ import (
 	v1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/uuid"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/record"
-	"k8s.io/client-go/util/retry"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	ctrlenvtest "sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	"sigs.k8s.io/yaml"
 
 	"github.com/open-telemetry/opentelemetry-operator/apis/v1alpha1"
@@ -48,6 +42,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/certmanager"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/collector"
+	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/gatewayapi"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/opampbridge"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/openshift"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/prometheus"
@@ -58,11 +53,13 @@ import (
 	"github.com/open-telemetry/opentelemetry-operator/internal/manifests/collector/testdata"
 	"github.com/open-telemetry/opentelemetry-operator/internal/manifests/manifestutils"
 	"github.com/open-telemetry/opentelemetry-operator/internal/rbac"
+	"github.com/open-telemetry/opentelemetry-operator/internal/testenv"
+	wh "github.com/open-telemetry/opentelemetry-operator/internal/webhook"
 )
 
 var (
 	k8sClient  client.Client
-	testEnv    *envtest.Environment
+	testEnv    *ctrlenvtest.Environment
 	testScheme *runtime.Scheme = scheme.Scheme
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -97,13 +94,14 @@ type mockAutoDetect struct {
 	TargetAllocatorAvailabilityFunc func() (targetallocator.Availability, error)
 	CollectorCRDAvailabilityFunc    func() (collector.Availability, error)
 	OpAmpBridgeAvailabilityFunc     func() (opampbridge.Availability, error)
+	GatewayAPIsAvailabilityFunc     func() (gatewayapi.ApiAvailability, error)
 }
 
-func (m *mockAutoDetect) FIPSEnabled(_ context.Context) bool {
+func (*mockAutoDetect) FIPSEnabled(context.Context) bool {
 	return false
 }
 
-func (m *mockAutoDetect) NativeSidecarSupport() (bool, error) {
+func (*mockAutoDetect) NativeSidecarSupport() (bool, error) {
 	return false, nil
 }
 
@@ -156,6 +154,13 @@ func (m *mockAutoDetect) OpAmpBridgeAvailablity() (opampbridge.Availability, err
 	return opampbridge.NotAvailable, nil
 }
 
+func (m *mockAutoDetect) GatewayAPIsAvailability() (gatewayapi.ApiAvailability, error) {
+	if m.GatewayAPIsAvailabilityFunc != nil {
+		return m.GatewayAPIsAvailabilityFunc()
+	}
+	return gatewayapi.ApiNotAvailable, nil
+}
+
 func TestMain(m *testing.M) {
 	var err error
 	ctx, cancel = context.WithCancel(context.TODO())
@@ -170,116 +175,66 @@ func TestMain(m *testing.M) {
 	utilruntime.Must(routev1.AddToScheme(testScheme))
 	utilruntime.Must(v1alpha1.AddToScheme(testScheme))
 	utilruntime.Must(v1beta1.AddToScheme(testScheme))
+	utilruntime.Must(gatewayv1.Install(testScheme))
 
-	testEnv = &envtest.Environment{
+	tenv, err := testenv.Start(&ctrlenvtest.Environment{
 		CRDDirectoryPaths: []string{filepath.Join("..", "..", "config", "crd", "bases")},
-		CRDs:              []*apiextensionsv1.CustomResourceDefinition{testdata.OpenShiftRouteCRD, testdata.ServiceMonitorCRD, testdata.PodMonitorCRD},
-		WebhookInstallOptions: envtest.WebhookInstallOptions{
-			Paths: []string{filepath.Join("..", "..", "config", "webhook")},
+		CRDs:              []*apiextensionsv1.CustomResourceDefinition{testdata.OpenShiftRouteCRD, testdata.ServiceMonitorCRD, testdata.PodMonitorCRD, testdata.HTTPRouteCRD},
+		WebhookInstallOptions: ctrlenvtest.WebhookInstallOptions{
+			Paths:                   []string{filepath.Join("..", "..", "config", "webhook")},
+			IgnoreSchemeConvertible: true,
 		},
-	}
-	restCfg, err = testEnv.Start()
+	}, testScheme)
 	if err != nil {
-		fmt.Printf("failed to start testEnv: %v", err)
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	testEnv = tenv.Env
+	restCfg = tenv.Config
+	k8sClient = tenv.Client
+
+	mgr, err := testenv.NewWebhookManager(restCfg, testScheme, &testEnv.WebhookInstallOptions)
+	if err != nil {
+		fmt.Println(err)
 		os.Exit(1)
 	}
 
-	k8sClient, err = client.New(restCfg, client.Options{Scheme: testScheme})
-	if err != nil {
-		fmt.Printf("failed to setup a Kubernetes client: %v", err)
-		os.Exit(1)
-	}
-
-	// start webhook server using Manager
-	webhookInstallOptions := &testEnv.WebhookInstallOptions
-	mgr, mgrErr := ctrl.NewManager(restCfg, ctrl.Options{
-		Scheme:         testScheme,
-		LeaderElection: false,
-		WebhookServer: webhook.NewServer(webhook.Options{
-			Host:    webhookInstallOptions.LocalServingHost,
-			Port:    webhookInstallOptions.LocalServingPort,
-			CertDir: webhookInstallOptions.LocalServingCertDir,
-		}),
-		Metrics: metricsserver.Options{
-			BindAddress: "0",
-		},
-	})
-	if mgrErr != nil {
-		fmt.Printf("failed to start webhook server: %v", mgrErr)
-		os.Exit(1)
-	}
 	clientset, clientErr := kubernetes.NewForConfig(restCfg)
 	if clientErr != nil {
 		fmt.Printf("failed to setup kubernetes clientset %v", clientErr)
 	}
 	reviewer := rbac.NewReviewer(clientset)
 
-	if err = v1beta1.SetupCollectorWebhook(mgr, config.New(), reviewer, nil, nil, nil); err != nil {
+	if err = wh.SetupCollectorWebhook(mgr, config.New(), reviewer, nil, nil, nil); err != nil {
 		fmt.Printf("failed to SetupWebhookWithManager: %v", err)
 		os.Exit(1)
 	}
-	if err = v1alpha1.SetupTargetAllocatorWebhook(mgr, config.New(), reviewer); err != nil {
+	if err = wh.SetupTargetAllocatorWebhook(mgr, config.New(), reviewer); err != nil {
 		fmt.Printf("failed to SetupWebhookWithManager: %v", err)
 		os.Exit(1)
 	}
-
-	if err = v1alpha1.SetupTargetAllocatorWebhook(mgr, config.New(), reviewer); err != nil {
+	if err = wh.SetupTargetAllocatorWebhook(mgr, config.New(), reviewer); err != nil {
 		fmt.Printf("failed to SetupWebhookWithManager: %v", err)
 		os.Exit(1)
 	}
-
-	if err = v1alpha1.SetupOpAMPBridgeWebhook(mgr, config.New()); err != nil {
+	if err = wh.SetupOpAMPBridgeWebhook(mgr, config.New()); err != nil {
 		fmt.Printf("failed to SetupWebhookWithManager: %v", err)
 		os.Exit(1)
 	}
 
 	ctx, cancel = context.WithCancel(context.TODO())
 	defer cancel()
-	go func() {
-		if err = mgr.Start(ctx); err != nil {
-			fmt.Printf("failed to start manager: %v", err)
-			os.Exit(1)
-		}
-	}()
 
-	// wait for the webhook server to get ready
-	wg := &sync.WaitGroup{}
-	wg.Add(1)
-	dialer := &net.Dialer{Timeout: time.Second}
-	addrPort := fmt.Sprintf("%s:%d", webhookInstallOptions.LocalServingHost, webhookInstallOptions.LocalServingPort)
-	go func(wg *sync.WaitGroup) {
-		defer wg.Done()
-		if err = retry.OnError(wait.Backoff{
-			Steps:    20,
-			Duration: 10 * time.Millisecond,
-			Factor:   1.5,
-			Jitter:   0.1,
-			Cap:      time.Second * 30,
-		}, func(error) bool {
-			return true
-		}, func() error {
-			// #nosec G402
-			conn, tlsErr := tls.DialWithDialer(dialer, "tcp", addrPort, &tls.Config{InsecureSkipVerify: true})
-			if tlsErr != nil {
-				return tlsErr
-			}
-			_ = conn.Close()
-			return nil
-		}); err != nil {
-			fmt.Printf("failed to wait for webhook server to be ready: %v", err)
-			os.Exit(1)
-		}
-	}(wg)
-	wg.Wait()
-
-	code := m.Run()
-
-	err = testEnv.Stop()
-	if err != nil {
-		fmt.Printf("failed to stop testEnv: %v", err)
+	if err := testenv.RunWebhookServer(ctx, mgr, &testEnv.WebhookInstallOptions); err != nil {
+		fmt.Println(err)
 		os.Exit(1)
 	}
 
+	code := m.Run()
+
+	if err := tenv.Stop(); err != nil {
+		fmt.Println(err)
+	}
 	os.Exit(code)
 }
 
@@ -314,7 +269,8 @@ func testCollectorWithModeAndReplicas(t *testing.T, name string, mode v1beta1.Mo
 							IntVal: 80,
 						},
 						NodePort: 0,
-					}}},
+					},
+				}},
 				Replicas: &replicas,
 			},
 			Config: otelConfig,
@@ -323,16 +279,16 @@ func testCollectorWithModeAndReplicas(t *testing.T, name string, mode v1beta1.Mo
 	}
 }
 
-func testCollectorAssertNoErr(t *testing.T, name string, taContainerImage string, file string) v1beta1.OpenTelemetryCollector {
+func testCollectorAssertNoErr(t *testing.T, name, taContainerImage, file string) v1beta1.OpenTelemetryCollector {
 	p, err := testCollectorWithConfigFile(name, taContainerImage, file)
 	assert.NoError(t, err)
-	if len(taContainerImage) == 0 {
+	if taContainerImage == "" {
 		p.Spec.TargetAllocator.Enabled = false
 	}
 	return p
 }
 
-func testCollectorWithConfigFile(name string, taContainerImage string, file string) (v1beta1.OpenTelemetryCollector, error) {
+func testCollectorWithConfigFile(name, taContainerImage, file string) (v1beta1.OpenTelemetryCollector, error) {
 	replicas := int32(1)
 	var configYAML []byte
 	var err error
@@ -371,7 +327,8 @@ func testCollectorWithConfigFile(name string, taContainerImage string, file stri
 							IntVal: 80,
 						},
 						NodePort: 0,
-					}}},
+					},
+				}},
 				Replicas: &replicas,
 			},
 			Mode: v1beta1.ModeStatefulSet,
@@ -415,7 +372,8 @@ func testCollectorWithHPA(t *testing.T, minReps, maxReps int32) v1beta1.OpenTele
 							IntVal: 80,
 						},
 						NodePort: 0,
-					}}},
+					},
+				}},
 			},
 
 			Config: otelConfig,
@@ -445,7 +403,7 @@ func testCollectorWithPDB(t *testing.T, minAvailable, maxUnavailable int32) v1be
 	pdb := &v1beta1.PodDisruptionBudgetSpec{}
 
 	if maxUnavailable > 0 && minAvailable > 0 {
-		fmt.Printf("worng configuration: %v", fmt.Errorf("minAvailable and maxUnavailable cannot be both set"))
+		fmt.Printf("worng configuration: %v", errors.New("minAvailable and maxUnavailable cannot be both set"))
 	}
 	if maxUnavailable > 0 {
 		pdb.MaxUnavailable = &intstr.IntOrString{
@@ -480,7 +438,8 @@ func testCollectorWithPDB(t *testing.T, minAvailable, maxUnavailable int32) v1be
 							IntVal: 80,
 						},
 						NodePort: 0,
-					}}},
+					},
+				}},
 				PodDisruptionBudget: pdb,
 			},
 
@@ -537,14 +496,14 @@ func opampBridgeParams() manifests.Params {
 		},
 		Scheme:   testScheme,
 		Log:      logger,
-		Recorder: record.NewFakeRecorder(10),
+		Recorder: events.NewFakeRecorder(10),
 	}
 }
 
 func populateObjectIfExists(t testing.TB, object client.Object, namespacedName types.NamespacedName) (bool, error) {
 	t.Helper()
 	err := k8sClient.Get(context.Background(), namespacedName, object)
-	if errors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
 		return false, nil
 	}
 	if err != nil {

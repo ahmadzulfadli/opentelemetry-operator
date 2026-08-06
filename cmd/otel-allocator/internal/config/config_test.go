@@ -4,13 +4,14 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/aws/smithy-go/ptr"
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	commonconfig "github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
 	promconfig "github.com/prometheus/prometheus/config"
@@ -73,10 +74,16 @@ func TestLoadFromFile(t *testing.T) {
 						EvaluationInterval:         model.Duration(60 * time.Second),
 						MetricNameValidationScheme: model.UTF8Validation,
 						MetricNameEscapingScheme:   model.AllowUTF8,
-						ScrapeNativeHistograms:     ptr.Bool(false),
+						ScrapeNativeHistograms:     new(false),
+						ExtraScrapeMetrics:         new(false),
 					},
 					Runtime:    promconfig.DefaultRuntimeConfig,
 					OTLPConfig: promconfig.DefaultOTLPConfig,
+					StorageConfig: promconfig.StorageConfig{
+						TSDBConfig: &promconfig.TSDBConfig{
+							Retention: &promconfig.TSDBRetentionConfig{},
+						},
+					},
 					ScrapeConfigs: []*promconfig.ScrapeConfig{
 						{
 							JobName:                        "prometheus",
@@ -87,9 +94,10 @@ func TestLoadFromFile(t *testing.T) {
 							ScrapeTimeout:                  model.Duration(10 * time.Second),
 							MetricNameValidationScheme:     model.UTF8Validation,
 							MetricNameEscapingScheme:       model.AllowUTF8,
-							AlwaysScrapeClassicHistograms:  ptr.Bool(false),
-							ConvertClassicHistogramsToNHCB: ptr.Bool(false),
-							ScrapeNativeHistograms:         ptr.Bool(false),
+							AlwaysScrapeClassicHistograms:  new(false),
+							ConvertClassicHistogramsToNHCB: new(false),
+							ScrapeNativeHistograms:         new(false),
+							ExtraScrapeMetrics:             new(false),
 							MetricsPath:                    "/metrics",
 							Scheme:                         "http",
 							HTTPClientConfig: commonconfig.HTTPClientConfig{
@@ -162,10 +170,16 @@ func TestLoadFromFile(t *testing.T) {
 						ScrapeTimeout:              model.Duration(10 * time.Second),
 						EvaluationInterval:         model.Duration(60 * time.Second),
 						MetricNameValidationScheme: model.UTF8Validation,
-						ScrapeNativeHistograms:     ptr.Bool(false),
+						ScrapeNativeHistograms:     new(false),
+						ExtraScrapeMetrics:         new(false),
 					},
 					Runtime:    promconfig.DefaultRuntimeConfig,
 					OTLPConfig: promconfig.DefaultOTLPConfig,
+					StorageConfig: promconfig.StorageConfig{
+						TSDBConfig: &promconfig.TSDBConfig{
+							Retention: &promconfig.TSDBRetentionConfig{},
+						},
+					},
 					ScrapeConfigs: []*promconfig.ScrapeConfig{
 						{
 							JobName:                        "prometheus",
@@ -176,9 +190,10 @@ func TestLoadFromFile(t *testing.T) {
 							ScrapeTimeout:                  model.Duration(10 * time.Second),
 							MetricNameValidationScheme:     model.UTF8Validation,
 							MetricNameEscapingScheme:       model.AllowUTF8,
-							AlwaysScrapeClassicHistograms:  ptr.Bool(false),
-							ConvertClassicHistogramsToNHCB: ptr.Bool(false),
-							ScrapeNativeHistograms:         ptr.Bool(false),
+							AlwaysScrapeClassicHistograms:  new(false),
+							ConvertClassicHistogramsToNHCB: new(false),
+							ScrapeNativeHistograms:         new(false),
+							ExtraScrapeMetrics:             new(false),
 							MetricsPath:                    "/metrics",
 							Scheme:                         "http",
 							HTTPClientConfig: commonconfig.HTTPClientConfig{
@@ -263,10 +278,16 @@ func TestLoadFromFile(t *testing.T) {
 						EvaluationInterval:         model.Duration(60 * time.Second),
 						MetricNameValidationScheme: model.UTF8Validation,
 						MetricNameEscapingScheme:   model.AllowUTF8,
-						ScrapeNativeHistograms:     ptr.Bool(false),
+						ScrapeNativeHistograms:     new(false),
+						ExtraScrapeMetrics:         new(false),
 					},
 					Runtime:    promconfig.DefaultRuntimeConfig,
 					OTLPConfig: promconfig.DefaultOTLPConfig,
+					StorageConfig: promconfig.StorageConfig{
+						TSDBConfig: &promconfig.TSDBConfig{
+							Retention: &promconfig.TSDBRetentionConfig{},
+						},
+					},
 					ScrapeConfigs: []*promconfig.ScrapeConfig{
 						{
 							JobName:                        "prometheus",
@@ -277,9 +298,10 @@ func TestLoadFromFile(t *testing.T) {
 							ScrapeTimeout:                  model.Duration(10 * time.Second),
 							MetricNameValidationScheme:     model.UTF8Validation,
 							MetricNameEscapingScheme:       model.AllowUTF8,
-							AlwaysScrapeClassicHistograms:  ptr.Bool(false),
-							ConvertClassicHistogramsToNHCB: ptr.Bool(false),
-							ScrapeNativeHistograms:         ptr.Bool(false),
+							AlwaysScrapeClassicHistograms:  new(false),
+							ConvertClassicHistogramsToNHCB: new(false),
+							ScrapeNativeHistograms:         new(false),
+							ExtraScrapeMetrics:             new(false),
 							MetricsPath:                    "/metrics",
 							Scheme:                         "http",
 							HTTPClientConfig: commonconfig.HTTPClientConfig{
@@ -350,13 +372,19 @@ func TestLoadFromFile(t *testing.T) {
 					GlobalConfig: promconfig.GlobalConfig{
 						ScrapeInterval:             model.Duration(60 * time.Second),
 						ScrapeTimeout:              model.Duration(10 * time.Second),
-						ScrapeNativeHistograms:     ptr.Bool(false),
+						ScrapeNativeHistograms:     new(false),
+						ExtraScrapeMetrics:         new(false),
 						EvaluationInterval:         model.Duration(60 * time.Second),
 						MetricNameValidationScheme: model.UTF8Validation,
 						MetricNameEscapingScheme:   model.AllowUTF8,
 					},
 					Runtime:    promconfig.DefaultRuntimeConfig,
 					OTLPConfig: promconfig.DefaultOTLPConfig,
+					StorageConfig: promconfig.StorageConfig{
+						TSDBConfig: &promconfig.TSDBConfig{
+							Retention: &promconfig.TSDBRetentionConfig{},
+						},
+					},
 					ScrapeConfigs: []*promconfig.ScrapeConfig{
 						{
 							JobName:                        "prometheus",
@@ -367,9 +395,10 @@ func TestLoadFromFile(t *testing.T) {
 							ScrapeTimeout:                  model.Duration(10 * time.Second),
 							MetricNameValidationScheme:     model.UTF8Validation,
 							MetricNameEscapingScheme:       model.AllowUTF8,
-							AlwaysScrapeClassicHistograms:  ptr.Bool(false),
-							ConvertClassicHistogramsToNHCB: ptr.Bool(false),
-							ScrapeNativeHistograms:         ptr.Bool(false),
+							AlwaysScrapeClassicHistograms:  new(false),
+							ConvertClassicHistogramsToNHCB: new(false),
+							ScrapeNativeHistograms:         new(false),
+							ExtraScrapeMetrics:             new(false),
 							MetricsPath:                    "/metrics",
 							Scheme:                         "http",
 							HTTPClientConfig: commonconfig.HTTPClientConfig{
@@ -464,13 +493,19 @@ func TestLoadFromFile(t *testing.T) {
 					GlobalConfig: promconfig.GlobalConfig{
 						ScrapeInterval:             model.Duration(60 * time.Second),
 						ScrapeTimeout:              model.Duration(10 * time.Second),
-						ScrapeNativeHistograms:     ptr.Bool(false),
+						ScrapeNativeHistograms:     new(false),
+						ExtraScrapeMetrics:         new(false),
 						EvaluationInterval:         model.Duration(60 * time.Second),
 						MetricNameValidationScheme: model.UTF8Validation,
 						MetricNameEscapingScheme:   model.AllowUTF8,
 					},
 					Runtime:    promconfig.DefaultRuntimeConfig,
 					OTLPConfig: promconfig.DefaultOTLPConfig,
+					StorageConfig: promconfig.StorageConfig{
+						TSDBConfig: &promconfig.TSDBConfig{
+							Retention: &promconfig.TSDBRetentionConfig{},
+						},
+					},
 					ScrapeConfigs: []*promconfig.ScrapeConfig{
 						{
 							JobName:                        "prometheus",
@@ -481,9 +516,112 @@ func TestLoadFromFile(t *testing.T) {
 							ScrapeTimeout:                  model.Duration(10 * time.Second),
 							MetricNameValidationScheme:     model.UTF8Validation,
 							MetricNameEscapingScheme:       model.AllowUTF8,
-							AlwaysScrapeClassicHistograms:  ptr.Bool(false),
-							ConvertClassicHistogramsToNHCB: ptr.Bool(false),
-							ScrapeNativeHistograms:         ptr.Bool(false),
+							AlwaysScrapeClassicHistograms:  new(false),
+							ConvertClassicHistogramsToNHCB: new(false),
+							ScrapeNativeHistograms:         new(false),
+							ExtraScrapeMetrics:             new(false),
+							MetricsPath:                    "/metrics",
+							Scheme:                         "http",
+							HTTPClientConfig: commonconfig.HTTPClientConfig{
+								FollowRedirects: true,
+								EnableHTTP2:     true,
+							},
+							ServiceDiscoveryConfigs: []discovery.Config{
+								discovery.StaticConfig{
+									{
+										Targets: []model.LabelSet{
+											{model.AddressLabel: "prom.domain:9001"},
+											{model.AddressLabel: "prom.domain:9002"},
+											{model.AddressLabel: "prom.domain:9003"},
+										},
+										Labels: model.LabelSet{
+											"my": "label",
+										},
+										Source: "0",
+									},
+								},
+							},
+						},
+					},
+				},
+				CollectorNotReadyGracePeriod: 30 * time.Second,
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name: "scrape class with camelCase tlsConfig fields",
+			args: args{
+				file: filepath.Join("testdata", "scrape_class_test.yaml"),
+			},
+			want: Config{
+				ListenAddr:         DefaultListenAddr,
+				KubeConfigFilePath: DefaultKubeConfigFilePath,
+				AllocationStrategy: DefaultAllocationStrategy,
+				CollectorNamespace: "default",
+				CollectorSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{
+						"app.kubernetes.io/instance":   "default.test",
+						"app.kubernetes.io/managed-by": "opentelemetry-operator",
+					},
+				},
+				FilterStrategy: DefaultFilterStrategy,
+				PrometheusCR: PrometheusCRConfig{
+					Enabled:        true,
+					ScrapeInterval: model.Duration(time.Second * 30),
+					ScrapeClasses: []monitoringv1.ScrapeClass{
+						{
+							Name:    "test-scrape-class",
+							Default: new(false),
+							TLSConfig: &monitoringv1.TLSConfig{
+								TLSFilesConfig: monitoringv1.TLSFilesConfig{
+									CAFile: "/etc/ca-bundle.pem",
+								},
+								SafeTLSConfig: monitoringv1.SafeTLSConfig{
+									InsecureSkipVerify: new(true),
+								},
+							},
+						},
+					},
+					ServiceMonitorNamespaceSelector: &metav1.LabelSelector{},
+					PodMonitorNamespaceSelector:     &metav1.LabelSelector{},
+					ScrapeConfigNamespaceSelector:   &metav1.LabelSelector{},
+					ProbeNamespaceSelector:          &metav1.LabelSelector{},
+					ScrapeProtocols:                 defaultScrapeProtocolsCR,
+				},
+				HTTPS: HTTPSServerConfig{
+					ListenAddr: ":8443",
+				},
+				PromConfig: &promconfig.Config{
+					GlobalConfig: promconfig.GlobalConfig{
+						ScrapeInterval:             model.Duration(60 * time.Second),
+						ScrapeTimeout:              model.Duration(10 * time.Second),
+						ScrapeNativeHistograms:     new(false),
+						ExtraScrapeMetrics:         new(false),
+						EvaluationInterval:         model.Duration(60 * time.Second),
+						MetricNameValidationScheme: model.UTF8Validation,
+						MetricNameEscapingScheme:   model.AllowUTF8,
+					},
+					Runtime:    promconfig.DefaultRuntimeConfig,
+					OTLPConfig: promconfig.DefaultOTLPConfig,
+					StorageConfig: promconfig.StorageConfig{
+						TSDBConfig: &promconfig.TSDBConfig{
+							Retention: &promconfig.TSDBRetentionConfig{},
+						},
+					},
+					ScrapeConfigs: []*promconfig.ScrapeConfig{
+						{
+							JobName:                        "prometheus",
+							EnableCompression:              true,
+							HonorTimestamps:                true,
+							ScrapeInterval:                 model.Duration(60 * time.Second),
+							ScrapeProtocols:                promconfig.DefaultScrapeProtocols,
+							ScrapeTimeout:                  model.Duration(10 * time.Second),
+							MetricNameValidationScheme:     model.UTF8Validation,
+							MetricNameEscapingScheme:       model.AllowUTF8,
+							AlwaysScrapeClassicHistograms:  new(false),
+							ConvertClassicHistogramsToNHCB: new(false),
+							ScrapeNativeHistograms:         new(false),
+							ExtraScrapeMetrics:             new(false),
 							MetricsPath:                    "/metrics",
 							Scheme:                         "http",
 							HTTPClientConfig: commonconfig.HTTPClientConfig{
@@ -577,7 +715,8 @@ func TestLoadFromFile(t *testing.T) {
 				PromConfig: &promconfig.Config{
 					GlobalConfig: promconfig.GlobalConfig{
 						ScrapeInterval:             model.Duration(60 * time.Second),
-						ScrapeNativeHistograms:     ptr.Bool(false),
+						ScrapeNativeHistograms:     new(false),
+						ExtraScrapeMetrics:         new(false),
 						ScrapeTimeout:              model.Duration(10 * time.Second),
 						EvaluationInterval:         model.Duration(60 * time.Second),
 						MetricNameValidationScheme: model.UTF8Validation,
@@ -585,6 +724,11 @@ func TestLoadFromFile(t *testing.T) {
 					},
 					Runtime:    promconfig.DefaultRuntimeConfig,
 					OTLPConfig: promconfig.DefaultOTLPConfig,
+					StorageConfig: promconfig.StorageConfig{
+						TSDBConfig: &promconfig.TSDBConfig{
+							Retention: &promconfig.TSDBRetentionConfig{},
+						},
+					},
 					ScrapeConfigs: []*promconfig.ScrapeConfig{
 						{
 							JobName:                        "prometheus",
@@ -595,9 +739,10 @@ func TestLoadFromFile(t *testing.T) {
 							ScrapeProtocols:                promconfig.DefaultScrapeProtocols,
 							MetricNameValidationScheme:     model.UTF8Validation,
 							MetricNameEscapingScheme:       model.AllowUTF8,
-							AlwaysScrapeClassicHistograms:  ptr.Bool(false),
-							ConvertClassicHistogramsToNHCB: ptr.Bool(false),
-							ScrapeNativeHistograms:         ptr.Bool(false),
+							AlwaysScrapeClassicHistograms:  new(false),
+							ConvertClassicHistogramsToNHCB: new(false),
+							ScrapeNativeHistograms:         new(false),
+							ExtraScrapeMetrics:             new(false),
 							MetricsPath:                    "/metrics",
 							Scheme:                         "http",
 							HTTPClientConfig: commonconfig.HTTPClientConfig{
@@ -648,6 +793,31 @@ func TestLoadFromEnv(t *testing.T) {
 	assert.Equal(t, namespace, cfg.CollectorNamespace)
 }
 
+func TestLoadFromEnvAllowInsecureAuthSecrets(t *testing.T) {
+	t.Run("not set defaults to false", func(t *testing.T) {
+		cfg := &Config{}
+		err := LoadFromEnv(cfg)
+		require.NoError(t, err)
+		assert.False(t, cfg.AllowInsecureAuthSecrets)
+	})
+
+	t.Run("set to true", func(t *testing.T) {
+		t.Setenv("ALLOW_INSECURE_AUTH_SECRETS", "true")
+		cfg := &Config{}
+		err := LoadFromEnv(cfg)
+		require.NoError(t, err)
+		assert.True(t, cfg.AllowInsecureAuthSecrets)
+	})
+
+	t.Run("set to false", func(t *testing.T) {
+		t.Setenv("ALLOW_INSECURE_AUTH_SECRETS", "false")
+		cfg := &Config{}
+		err := LoadFromEnv(cfg)
+		require.NoError(t, err)
+		assert.False(t, cfg.AllowInsecureAuthSecrets)
+	})
+}
+
 func TestValidateConfig(t *testing.T) {
 	testCases := []struct {
 		name        string
@@ -657,7 +827,7 @@ func TestValidateConfig(t *testing.T) {
 		{
 			name:        "no namespace",
 			fileConfig:  Config{PrometheusCR: PrometheusCRConfig{Enabled: true}},
-			expectedErr: fmt.Errorf("collector namespace must be set"),
+			expectedErr: errors.New("collector namespace must be set"),
 		},
 		{
 			name:        "promCR enabled, no Prometheus config",
@@ -667,12 +837,12 @@ func TestValidateConfig(t *testing.T) {
 		{
 			name:        "promCR disabled, no Prometheus config",
 			fileConfig:  Config{PromConfig: nil},
-			expectedErr: fmt.Errorf("at least one scrape config must be defined, or Prometheus CR watching must be enabled"),
+			expectedErr: errors.New("at least one scrape config must be defined, or Prometheus CR watching must be enabled"),
 		},
 		{
 			name:        "promCR disabled, Prometheus config present, no scrapeConfigs",
 			fileConfig:  Config{PromConfig: &promconfig.Config{}},
-			expectedErr: fmt.Errorf("at least one scrape config must be defined, or Prometheus CR watching must be enabled"),
+			expectedErr: errors.New("at least one scrape config must be defined, or Prometheus CR watching must be enabled"),
 		},
 		{
 			name: "promCR disabled, Prometheus config present, scrapeConfigs present",
@@ -701,12 +871,11 @@ func TestValidateConfig(t *testing.T) {
 				},
 				CollectorNamespace: "default",
 			},
-			expectedErr: fmt.Errorf("only one of allowNamespaces or denyNamespaces can be set"),
+			expectedErr: errors.New("only one of allowNamespaces or denyNamespaces can be set"),
 		},
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			err := ValidateConfig(&tc.fileConfig)
 			assert.Equal(t, tc.expectedErr, err)
@@ -748,11 +917,57 @@ func TestGetAllowDenyLists(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			allowList, denyList := tc.promCRConfig.GetAllowDenyLists()
 			assert.Equal(t, tc.expectedAllowList, allowList)
 			assert.Equal(t, tc.expectedDenyList, denyList)
+		})
+	}
+}
+
+func TestGetSecretsAllowList(t *testing.T) {
+	testCases := []struct {
+		name                     string
+		promCRConfig             PrometheusCRConfig
+		collectorNamespace       string
+		expectedSecretsAllowList map[string]struct{}
+	}{
+		{
+			name:                     "no secrets namespaces configured, defaults to collector namespace",
+			promCRConfig:             PrometheusCRConfig{Enabled: true},
+			collectorNamespace:       "ta-namespace",
+			expectedSecretsAllowList: map[string]struct{}{"ta-namespace": {}},
+		},
+		{
+			name:                     "no secrets namespaces and no collector namespace",
+			promCRConfig:             PrometheusCRConfig{Enabled: true},
+			collectorNamespace:       "",
+			expectedSecretsAllowList: map[string]struct{}{},
+		},
+		{
+			name:                     "single namespace overrides default",
+			promCRConfig:             PrometheusCRConfig{Enabled: true, SecretNamespaces: []string{"ns1"}},
+			collectorNamespace:       "ta-namespace",
+			expectedSecretsAllowList: map[string]struct{}{"ns1": {}},
+		},
+		{
+			name:                     "multiple namespaces",
+			promCRConfig:             PrometheusCRConfig{Enabled: true, SecretNamespaces: []string{"ns1", "ns2", "ns3"}},
+			collectorNamespace:       "ta-namespace",
+			expectedSecretsAllowList: map[string]struct{}{"ns1": {}, "ns2": {}, "ns3": {}},
+		},
+		{
+			name:                     "empty slice defaults to collector namespace",
+			promCRConfig:             PrometheusCRConfig{Enabled: true, SecretNamespaces: []string{}},
+			collectorNamespace:       "ta-namespace",
+			expectedSecretsAllowList: map[string]struct{}{"ta-namespace": {}},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			secretsAllowList := tc.promCRConfig.GetSecretsAllowList(tc.collectorNamespace)
+			assert.Equal(t, tc.expectedSecretsAllowList, secretsAllowList)
 		})
 	}
 }
@@ -779,7 +994,7 @@ users:
   user:
     token: dummy-token
 `
-		err := os.WriteFile(kubeConfigPath, []byte(kubeConfigContent), 0600)
+		err := os.WriteFile(kubeConfigPath, []byte(kubeConfigContent), 0o600)
 		require.NoError(t, err)
 		return kubeConfigPath
 	}
@@ -788,7 +1003,7 @@ users:
 		// Setup: create empty config file and dummy kube config
 		tempDir := t.TempDir()
 		emptyConfigPath := filepath.Join(tempDir, "empty.yaml")
-		err := os.WriteFile(emptyConfigPath, []byte("{}"), 0600)
+		err := os.WriteFile(emptyConfigPath, []byte("{}"), 0o600)
 		require.NoError(t, err)
 
 		kubeConfigPath := createDummyKubeConfig(t, tempDir)
@@ -811,6 +1026,7 @@ users:
 		assert.Equal(t, DefaultFilterStrategy, config.FilterStrategy)
 		assert.False(t, config.PrometheusCR.Enabled)
 		assert.False(t, config.HTTPS.Enabled)
+		assert.False(t, config.AllowInsecureAuthSecrets)
 	})
 
 	t.Run("command-line has priority over config file for boolean values", func(t *testing.T) {
@@ -821,9 +1037,10 @@ prometheus_cr:
   enabled: false
 https:
   enabled: false
+allow_insecure_auth_secrets: false
 `
 		configPath := filepath.Join(tempDir, "config.yaml")
-		err := os.WriteFile(configPath, []byte(configContent), 0600)
+		err := os.WriteFile(configPath, []byte(configContent), 0o600)
 		require.NoError(t, err)
 
 		kubeConfigPath := createDummyKubeConfig(t, tempDir)
@@ -833,6 +1050,7 @@ https:
 			"--" + configFilePathFlagName + "=" + configPath,
 			"--" + prometheusCREnabledFlagName + "=true",
 			"--" + httpsEnabledFlagName + "=true",
+			"--" + allowInsecureAuthSecretsFlagName + "=true",
 			"--" + kubeConfigPathFlagName + "=" + kubeConfigPath,
 		}
 
@@ -843,6 +1061,7 @@ https:
 		// Assert CLI values override config file
 		assert.True(t, config.PrometheusCR.Enabled, "CLI should override config file for prometheus CR enabled")
 		assert.True(t, config.HTTPS.Enabled, "CLI should override config file for HTTPS enabled")
+		assert.True(t, config.AllowInsecureAuthSecrets, "CLI should override config file for allow insecure auth secrets")
 	})
 
 	t.Run("command-line has priority over config file for string values", func(t *testing.T) {
@@ -858,7 +1077,7 @@ https:
 kube_config_file_path: "/config/kube.config"
 `
 		configPath := filepath.Join(tempDir, "config.yaml")
-		err := os.WriteFile(configPath, []byte(configContent), 0600)
+		err := os.WriteFile(configPath, []byte(configContent), 0o600)
 		require.NoError(t, err)
 
 		kubeConfigPath := createDummyKubeConfig(t, tempDir)
@@ -903,6 +1122,7 @@ kube_config_file_path: "/config/kube.config"
 		configContent := `
 collector_namespace: config-file-namespace
 listen_addr: "` + configListenAddr + `"
+allow_insecure_auth_secrets: true
 prometheus_cr:
   enabled: true
 https:
@@ -911,7 +1131,7 @@ https:
 kube_config_file_path: "` + kubeConfigPath + `"
 `
 		configPath := filepath.Join(tempDir, "config.yaml")
-		err := os.WriteFile(configPath, []byte(configContent), 0600)
+		err := os.WriteFile(configPath, []byte(configContent), 0o600)
 		require.NoError(t, err)
 
 		// Prepare args for Load function with only config file path
@@ -930,13 +1150,14 @@ kube_config_file_path: "` + kubeConfigPath + `"
 		assert.Equal(t, ":7443", config.HTTPS.ListenAddr, "Config file should override defaults for HTTPS listen address")
 		assert.Equal(t, kubeConfigPath, config.KubeConfigFilePath, "Config file should set kube config path")
 		assert.Equal(t, "config-file-namespace", config.CollectorNamespace, "Config file should set collector namespace")
+		assert.True(t, config.AllowInsecureAuthSecrets, "Config file should override defaults for allow insecure auth secrets")
 	})
 
 	t.Run("environment variables are applied", func(t *testing.T) {
 		// Setup: create empty config file and dummy kube config
 		tempDir := t.TempDir()
 		emptyConfigPath := filepath.Join(tempDir, "empty.yaml")
-		err := os.WriteFile(emptyConfigPath, []byte("{}"), 0600)
+		err := os.WriteFile(emptyConfigPath, []byte("{}"), 0o600)
 		require.NoError(t, err)
 
 		kubeConfigPath := createDummyKubeConfig(t, tempDir)
@@ -973,7 +1194,7 @@ prometheus_cr:
 kube_config_file_path: "` + kubeConfigPath + `"
 `
 		configPath := filepath.Join(tempDir, "config.yaml")
-		err := os.WriteFile(configPath, []byte(configContent), 0600)
+		err := os.WriteFile(configPath, []byte(configContent), 0o600)
 		require.NoError(t, err)
 
 		// Environment variable sets value

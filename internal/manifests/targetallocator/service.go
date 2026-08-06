@@ -8,10 +8,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/certmanager"
 	"github.com/open-telemetry/opentelemetry-operator/internal/manifests/manifestutils"
 	"github.com/open-telemetry/opentelemetry-operator/internal/naming"
-	"github.com/open-telemetry/opentelemetry-operator/pkg/featuregate"
 )
 
 func Service(params Params) *corev1.Service {
@@ -23,13 +21,15 @@ func Service(params Params) *corev1.Service {
 	ports = append(ports, corev1.ServicePort{
 		Name:       "targetallocation",
 		Port:       80,
-		TargetPort: intstr.FromString("http")})
+		TargetPort: intstr.FromString("http"),
+	})
 
-	if params.Config.CertManagerAvailability == certmanager.Available && featuregate.EnableTargetAllocatorMTLS.IsEnabled() {
+	if manifestutils.IsTAMTLSEnabled(&params.TargetAllocator) {
 		ports = append(ports, corev1.ServicePort{
 			Name:       "targetallocation-https",
 			Port:       443,
-			TargetPort: intstr.FromString("https")})
+			TargetPort: intstr.FromString("https"),
+		})
 	}
 
 	return &corev1.Service{

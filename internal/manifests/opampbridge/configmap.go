@@ -21,10 +21,14 @@ func ConfigMap(params manifests.Params) (*corev1.ConfigMap, error) {
 	name := naming.OpAMPBridgeConfigMap(params.OpAMPBridge.Name)
 	labels := manifestutils.Labels(params.OpAMPBridge.ObjectMeta, name, params.OpAMPBridge.Spec.Image, ComponentOpAMPBridge, []string{})
 
-	config := make(map[interface{}]interface{})
+	config := make(map[any]any)
 
-	if len(params.OpAMPBridge.Spec.Endpoint) > 0 {
+	if params.OpAMPBridge.Spec.Endpoint != "" {
 		config["endpoint"] = params.OpAMPBridge.Spec.Endpoint
+	}
+
+	if params.OpAMPBridge.Spec.TLS != nil {
+		config["tls"] = params.OpAMPBridge.Spec.TLS
 	}
 
 	if len(params.OpAMPBridge.Spec.Headers) > 0 {
